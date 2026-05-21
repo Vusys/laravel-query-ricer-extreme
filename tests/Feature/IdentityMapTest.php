@@ -17,14 +17,14 @@ final class IdentityMapTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->store = app(IdentityMapStore::class);
+        $this->store = resolve(IdentityMapStore::class);
         $this->store->flush();
     }
 
     public function test_service_provider_loads(): void
     {
         $this->assertNotNull($this->app);
-        $this->assertInstanceOf(IdentityMapStore::class, app(IdentityMapStore::class));
+        $this->assertInstanceOf(IdentityMapStore::class, resolve(IdentityMapStore::class));
     }
 
     public function test_find_returns_same_instance(): void
@@ -259,8 +259,8 @@ final class IdentityMapTest extends TestCase
 
     public function test_store_is_singleton(): void
     {
-        $storeA = app(IdentityMapStore::class);
-        $storeB = app(IdentityMapStore::class);
+        $storeA = resolve(IdentityMapStore::class);
+        $storeB = resolve(IdentityMapStore::class);
 
         $this->assertSame($storeA, $storeB);
     }

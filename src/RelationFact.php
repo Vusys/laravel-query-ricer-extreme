@@ -6,13 +6,13 @@ namespace Vusys\QueryRicerExtreme;
 
 use Vusys\QueryRicerExtreme\Enums\RelationKind;
 
-final class RelationFact
+final readonly class RelationFact
 {
     public function __construct(
-        public readonly string $name,
-        public readonly RelationKind $kind,
-        public readonly bool $loaded,
-        public readonly bool $complete,
-        public readonly mixed $value,
+        public string $name,
+        public RelationKind $kind,
+        public bool $loaded,
+        public bool $complete,
+        public mixed $value,
     ) {}
 }

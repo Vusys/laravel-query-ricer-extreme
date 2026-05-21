@@ -6,7 +6,7 @@ namespace Vusys\QueryRicerExtreme;
 
 use Vusys\QueryRicerExtreme\Enums\PlanType;
 
-final class Explanation
+final readonly class Explanation implements \Stringable
 {
     /**
      * @param  list<int|string>  $knownKeys
@@ -15,15 +15,15 @@ final class Explanation
      * @param  list<int|string>  $rejectedKeys
      */
     public function __construct(
-        public readonly PlanType $type,
-        public readonly string $modelClass,
-        public readonly string $reason,
-        public readonly bool $sqlExecuted,
-        public readonly array $knownKeys = [],
-        public readonly array $missingKeys = [],
-        public readonly array $memoryKeys = [],
-        public readonly array $rejectedKeys = [],
-        public readonly ?string $coverageRegion = null,
+        public PlanType $type,
+        public string $modelClass,
+        public string $reason,
+        public bool $sqlExecuted,
+        public array $knownKeys = [],
+        public array $missingKeys = [],
+        public array $memoryKeys = [],
+        public array $rejectedKeys = [],
+        public ?string $coverageRegion = null,
     ) {}
 
     public function __toString(): string

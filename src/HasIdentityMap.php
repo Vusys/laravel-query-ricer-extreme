@@ -20,24 +20,24 @@ trait HasIdentityMap
     protected static function bootHasIdentityMap(): void
     {
         static::retrieved(function (Model $model): void {
-            app(IdentityMapStore::class)->remember($model);
+            resolve(IdentityMapStore::class)->remember($model);
         });
 
         static::saved(function (Model $model): void {
-            app(IdentityMapStore::class)->afterSaved($model);
+            resolve(IdentityMapStore::class)->afterSaved($model);
         });
 
         static::deleted(function (Model $model): void {
-            app(IdentityMapStore::class)->afterDeleted($model);
+            resolve(IdentityMapStore::class)->afterDeleted($model);
         });
 
         static::restored(function (Model $model): void {
-            app(IdentityMapStore::class)->afterSaved($model);
+            resolve(IdentityMapStore::class)->afterSaved($model);
         });
 
         if (in_array(SoftDeletes::class, class_uses_recursive(static::class), true)) {
             static::forceDeleted(function (Model $model): void {
-                app(IdentityMapStore::class)->afterForceDeleted($model);
+                resolve(IdentityMapStore::class)->afterForceDeleted($model);
             });
         }
     }

@@ -33,6 +33,7 @@ class IdentityMapBuilder extends Builder
      * @param  list<string>  $columns
      * @return TModel|Collection<int, TModel>|null
      */
+    #[\Override]
     public function find($id, $columns = ['*']): mixed
     {
         if (is_array($id) || $id instanceof Arrayable) {
@@ -50,7 +51,7 @@ class IdentityMapBuilder extends Builder
 
         /** @var TModel $model */
         $model = $this->getModel();
-        $store = app(IdentityMapStore::class);
+        $store = resolve(IdentityMapStore::class);
 
         if ($store->isDisabled()) {
             return $this->whereKey($id)->first($columns);
@@ -67,19 +68,18 @@ class IdentityMapBuilder extends Builder
             fingerprint: $fingerprint,
         );
 
-        if ($entry !== null && $entry->state === LifecycleState::Exists) {
-            if ($entry->attributes->satisfies($columns)) {
-                $store->capture(new Explanation(
-                    type: PlanType::ReturnModelFromMemory,
-                    modelClass: $model::class,
-                    reason: 'exact-primary-key-hit',
-                    sqlExecuted: false,
-                    memoryKeys: [$id],
-                ));
+        if ($entry !== null && $entry->state === LifecycleState::Exists && $entry->attributes->satisfies($columns)) {
+            $store->capture(new Explanation(
+                type: PlanType::ReturnModelFromMemory,
+                modelClass: $model::class,
+                reason: 'exact-primary-key-hit',
+                sqlExecuted: false,
+                memoryKeys: [$id],
+            ));
+            /** @var TModel $cached */
+            $cached = $entry->model;
 
-                /** @var TModel */
-                return $entry->model;
-            }
+            return $cached;
         }
 
         if ($store->isAbsent(
@@ -129,6 +129,7 @@ class IdentityMapBuilder extends Builder
      * @param  list<string>  $columns
      * @return array<int, TModel>
      */
+    #[\Override]
     public function getModels($columns = ['*']): array
     {
         if ($this->identityMapDisabled) {
@@ -137,7 +138,7 @@ class IdentityMapBuilder extends Builder
 
         /** @var TModel $model */
         $model = $this->getModel();
-        $store = app(IdentityMapStore::class);
+        $store = resolve(IdentityMapStore::class);
 
         if ($store->isDisabled()) {
             return parent::getModels($columns);
@@ -166,8 +167,10 @@ class IdentityMapBuilder extends Builder
                     memoryKeys: [$primaryKeyId],
                 ));
 
-                /** @var array<int, TModel> */
-                return [$entry->model];
+                /** @var TModel $cached */
+                $cached = $entry->model;
+
+                return [$cached];
             }
 
             if ($store->isAbsent(

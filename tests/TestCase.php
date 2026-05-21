@@ -20,6 +20,9 @@ abstract class TestCase extends OrchestraTestCase
     #[\Override]
     protected function defineDatabaseMigrations(): void
     {
+        Schema::dropIfExists('posts');
+        Schema::dropIfExists('users');
+
         Schema::create('users', function (Blueprint $table): void {
             $table->id();
             $table->string('name');
@@ -36,5 +39,13 @@ abstract class TestCase extends OrchestraTestCase
             $table->boolean('published')->default(false);
             $table->timestamps();
         });
+    }
+
+    #[\Override]
+    protected function tearDown(): void
+    {
+        Schema::dropIfExists('posts');
+        Schema::dropIfExists('users');
+        parent::tearDown();
     }
 }
