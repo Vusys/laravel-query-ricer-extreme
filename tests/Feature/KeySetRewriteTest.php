@@ -361,4 +361,49 @@ final class KeySetRewriteTest extends TestCase
 
         $this->assertSame(1, $queryCount, 'withoutIdentityMap() must bypass key-set rewrite');
     }
+
+    #[Test]
+    public function key_set_fetched_model_is_served_from_memory_on_subsequent_find(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        $bob = $this->createFresh('Bob', 'bob@example.com');
+
+        User::find($alice->id);
+
+        // Bob is unknown; partial hit causes SQL rewrite that fetches Bob.
+        // The fetched Bob must have allColumnsKnown marked so find() can serve from memory.
+        User::whereKey([$alice->id, $bob->id])->get();
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = User::find($bob->id);
+
+        $this->assertSame(0, $queryCount, 'Model fetched during key-set SQL rewrite must be served from memory on subsequent find()');
+        $this->assertInstanceOf(User::class, $result);
+        $this->assertSame($bob->id, $result->id);
+    }
+
+    #[Test]
+    public function where_in_type_in_all_in_memory_issues_no_sql(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        $bob = $this->createFresh('Bob', 'bob@example.com');
+
+        User::find($alice->id);
+        User::find($bob->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        // whereIn generates an 'In' where type (not 'InRaw' like whereKey does for integers).
+        $result = User::whereIn('id', [$alice->id, $bob->id])->get();
+
+        $this->assertSame(0, $queryCount, 'whereIn (type In) with all keys in memory must issue no SQL');
+        $this->assertCount(2, $result);
+    }
 }

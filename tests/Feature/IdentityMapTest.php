@@ -565,4 +565,79 @@ final class IdentityMapTest extends TestCase
 
         $this->assertFalse($this->store->isCapturing(), 'explain() must restore capturing state even when the callback throws');
     }
+
+    #[Test]
+    public function fallthrough_sql_marks_all_columns_known(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        $this->store->flush();
+
+        // Non-PK WHERE falls through to SQL. The returned model must be marked allColumnsKnown
+        // so that a subsequent find() can serve it from memory without re-querying.
+        User::where('name', 'Alice')->get();
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = User::find($alice->id);
+
+        $this->assertSame(0, $queryCount, 'Model returned from fallthrough SQL must be marked all-columns-known and served from memory');
+        $this->assertInstanceOf(User::class, $result);
+        $this->assertSame($alice->id, $result->id);
+    }
+
+    #[Test]
+    public function flush_for_model_class_clears_absent_entries(): void
+    {
+        User::find(9999);
+
+        $this->store->flush(User::class);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        User::find(9999);
+
+        $this->assertSame(1, $queryCount, 'flush(ModelClass) must clear absent entries for that class so the next find() issues SQL');
+    }
+
+    #[Test]
+    public function find_via_sql_marks_all_columns_known_for_subsequent_find(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        $this->store->flush();
+
+        // First find goes to SQL (alice not in map); must mark all columns known on the returned model.
+        User::find($alice->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        // Second find must be served from memory — impossible without allColumnsKnown being set.
+        $result = User::find($alice->id);
+
+        $this->assertSame(0, $queryCount, 'find() after SQL fetch must mark model all-columns-known so second find() needs no SQL');
+        $this->assertInstanceOf(User::class, $result);
+    }
+
+    #[Test]
+    public function explain_single_pk_via_where_returns_collection_from_memory(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+
+        $explanations = $this->store->explain(function () use ($alice): void {
+            User::query()->whereKey($alice->id)->get();
+        });
+
+        $this->assertCount(1, $explanations);
+        $this->assertSame('return_collection_from_memory', $explanations[0]->type->value);
+        $this->assertFalse($explanations[0]->sqlExecuted);
+        $this->assertContains($alice->id, $explanations[0]->memoryKeys);
+    }
 }
