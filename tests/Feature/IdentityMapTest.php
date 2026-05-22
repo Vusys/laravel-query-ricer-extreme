@@ -535,7 +535,7 @@ final class IdentityMapTest extends TestCase
         User::find($user->id);
 
         try {
-            $this->store->disabled(function (): void {
+            $this->store->disabled(function (): never {
                 throw new \RuntimeException('intentional');
             });
         } catch (\RuntimeException) {}
@@ -554,7 +554,7 @@ final class IdentityMapTest extends TestCase
     public function explain_restores_capturing_state_when_callback_throws(): void
     {
         try {
-            $this->store->explain(function (): void {
+            $this->store->explain(function (): never {
                 throw new \RuntimeException('intentional');
             });
         } catch (\RuntimeException) {}
