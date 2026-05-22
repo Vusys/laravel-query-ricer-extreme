@@ -483,7 +483,7 @@ final class IdentityMapTest extends TestCase
             $queryCount++;
         });
 
-        $result = User::query()->where('id', '!=', $user1->id)->first();
+        $result = User::query()->where('id', '!=', $user1->id)->orderBy('id')->first();
 
         $this->assertSame(1, $queryCount, 'Non-equal operator should not extract PK for map lookup');
         $this->assertSame($user2->id, $result?->id);
@@ -538,6 +538,7 @@ final class IdentityMapTest extends TestCase
             $this->store->disabled(function (): never {
                 throw new \RuntimeException('intentional');
             });
+            $this->fail('Expected RuntimeException was not thrown.');
         } catch (\RuntimeException) {
         }
 
@@ -558,6 +559,7 @@ final class IdentityMapTest extends TestCase
             $this->store->explain(function (): never {
                 throw new \RuntimeException('intentional');
             });
+            $this->fail('Expected RuntimeException was not thrown.');
         } catch (\RuntimeException) {
         }
 

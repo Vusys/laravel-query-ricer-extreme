@@ -20,11 +20,13 @@ abstract class PerformanceTestCase extends TestCase
         DB::enableQueryLog();
 
         $start = hrtime(true);
-        $fn();
-        $elapsed = (hrtime(true) - $start) / 1_000_000;
-
-        $queries = count(DB::getQueryLog());
-        DB::disableQueryLog();
+        try {
+            $fn();
+        } finally {
+            $elapsed = (hrtime(true) - $start) / 1_000_000;
+            $queries = count(DB::getQueryLog());
+            DB::disableQueryLog();
+        }
 
         $queryWord = $queries === 1 ? 'query' : 'queries';
 
