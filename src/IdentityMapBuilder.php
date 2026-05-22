@@ -12,6 +12,7 @@ use Vusys\QueryRicerExtreme\Enums\EvaluationResult;
 use Vusys\QueryRicerExtreme\Enums\LifecycleState;
 use Vusys\QueryRicerExtreme\Enums\PlanType;
 use Vusys\QueryRicerExtreme\Predicate\AndNode;
+use Vusys\QueryRicerExtreme\Predicate\ComparisonNode;
 use Vusys\QueryRicerExtreme\Predicate\PredicateNode;
 
 /**
@@ -316,6 +317,107 @@ class IdentityMapBuilder extends Builder
             return $this->mergeByInputOrder($memoryModels, $fetched, $keySet);
         }
 
+        // --- unique-key positive hit ---
+        $uniqueExtraction = $this->extractUniqueKeyLookup();
+
+        if ($uniqueExtraction !== null) {
+            [$uniqueKeyValues, $extraNodes] = $uniqueExtraction;
+
+            $uniqueEntry = $store->findByUniqueKey(
+                connection: $connection,
+                modelClass: $model::class,
+                table: $model->getTable(),
+                fingerprint: $fingerprint,
+                equalityValues: $uniqueKeyValues,
+            );
+
+            if ($uniqueEntry !== null && $uniqueEntry->state === LifecycleState::Exists && $uniqueEntry->attributes->satisfies($columns)) {
+                if ($extraNodes !== []) {
+                    $evaluator = new PredicateEvaluator;
+                    $evalResult = $evaluator->evaluate($uniqueEntry->attributes, new AndNode($extraNodes));
+
+                    if ($evalResult === EvaluationResult::Reject) {
+                        $store->capture(new Explanation(
+                            type: PlanType::ReturnEmptyCollection,
+                            modelClass: $model::class,
+                            reason: 'unique-key-hit-predicate-rejected',
+                            sqlExecuted: false,
+                        ));
+
+                        return [];
+                    }
+
+                    if ($evalResult === EvaluationResult::Match) {
+                        $store->capture(new Explanation(
+                            type: PlanType::ReturnCollectionFromMemory,
+                            modelClass: $model::class,
+                            reason: 'unique-key-positive-hit',
+                            sqlExecuted: false,
+                            memoryKeys: [$uniqueEntry->primaryKeyValue],
+                        ));
+
+                        /** @var TModel $cached */
+                        $cached = $uniqueEntry->model;
+
+                        return [$cached];
+                    }
+                    // Unknown → fall through to SQL below
+                } else {
+                    $store->capture(new Explanation(
+                        type: PlanType::ReturnCollectionFromMemory,
+                        modelClass: $model::class,
+                        reason: 'unique-key-positive-hit',
+                        sqlExecuted: false,
+                        memoryKeys: [$uniqueEntry->primaryKeyValue],
+                    ));
+
+                    /** @var TModel $cached */
+                    $cached = $uniqueEntry->model;
+
+                    return [$cached];
+                }
+            }
+
+            if ($extraNodes === [] && $store->isAbsentByUniqueKey(
+                connection: $connection,
+                modelClass: $model::class,
+                table: $model->getTable(),
+                fingerprint: $fingerprint,
+                equalityValues: $uniqueKeyValues,
+            )) {
+                $store->capture(new Explanation(
+                    type: PlanType::ReturnEmptyCollection,
+                    modelClass: $model::class,
+                    reason: 'unique-key-absence-tracked',
+                    sqlExecuted: false,
+                ));
+
+                return [];
+            }
+
+            $models = parent::getModels($columns);
+
+            $isFullSelect = $columns === ['*'];
+
+            foreach ($models as $result) {
+                if ($isFullSelect) {
+                    $store->markAllColumnsKnown($result);
+                }
+            }
+
+            if ($models === [] && $extraNodes === [] && (bool) config('query-ricer-extreme.absence_tracking.unique_key', true)) {
+                $store->recordAbsentByUniqueKey(
+                    connection: $connection,
+                    modelClass: $model::class,
+                    table: $model->getTable(),
+                    fingerprint: $fingerprint,
+                    equalityValues: $uniqueKeyValues,
+                );
+            }
+
+            return $models;
+        }
+
         // --- fallthrough: execute SQL normally ---
         $models = parent::getModels($columns);
 
@@ -339,6 +441,214 @@ class IdentityMapBuilder extends Builder
         }
 
         return $models;
+    }
+
+    public function exists(): bool
+    {
+        if ($this->identityMapDisabled) {
+            return parent::exists();
+        }
+
+        $store = resolve(IdentityMapStore::class);
+
+        if ($store->isDisabled()) {
+            return parent::exists();
+        }
+
+        $uniqueExtraction = $this->extractUniqueKeyLookup();
+
+        if ($uniqueExtraction === null) {
+            return parent::exists();
+        }
+
+        [$uniqueKeyValues, $extraNodes] = $uniqueExtraction;
+
+        /** @var TModel $model */
+        $model = $this->getModel();
+        $connection = $model->getConnection()->getName() ?? 'default';
+        $fingerprint = ScopeFingerprinter::fromBuilder($this);
+
+        $entry = $store->findByUniqueKey(
+            connection: $connection,
+            modelClass: $model::class,
+            table: $model->getTable(),
+            fingerprint: $fingerprint,
+            equalityValues: $uniqueKeyValues,
+        );
+
+        if ($entry !== null && $entry->state === LifecycleState::Exists) {
+            if ($extraNodes !== []) {
+                $evaluator = new PredicateEvaluator;
+                $evalResult = $evaluator->evaluate($entry->attributes, new AndNode($extraNodes));
+
+                if ($evalResult === EvaluationResult::Reject) {
+                    $store->capture(new Explanation(
+                        type: PlanType::ReturnExistsFromMemory,
+                        modelClass: $model::class,
+                        reason: 'unique-key-hit-predicate-rejected',
+                        sqlExecuted: false,
+                    ));
+
+                    return false;
+                }
+
+                if ($evalResult === EvaluationResult::Match) {
+                    $store->capture(new Explanation(
+                        type: PlanType::ReturnExistsFromMemory,
+                        modelClass: $model::class,
+                        reason: 'unique-key-positive-hit',
+                        sqlExecuted: false,
+                    ));
+
+                    return true;
+                }
+
+                return parent::exists();
+            }
+
+            $store->capture(new Explanation(
+                type: PlanType::ReturnExistsFromMemory,
+                modelClass: $model::class,
+                reason: 'unique-key-positive-hit',
+                sqlExecuted: false,
+            ));
+
+            return true;
+        }
+
+        if ($extraNodes === [] && $store->isAbsentByUniqueKey(
+            connection: $connection,
+            modelClass: $model::class,
+            table: $model->getTable(),
+            fingerprint: $fingerprint,
+            equalityValues: $uniqueKeyValues,
+        )) {
+            $store->capture(new Explanation(
+                type: PlanType::ReturnExistsFromMemory,
+                modelClass: $model::class,
+                reason: 'unique-key-absence-tracked',
+                sqlExecuted: false,
+            ));
+
+            return false;
+        }
+
+        return parent::exists();
+    }
+
+    /**
+     * Detect whether the current query is a unique-key lookup that can be served from the
+     * identity map.
+     *
+     * Returns [uniqueKeyValues, extraPredicateNodes] when a configured unique index is
+     * matched, or null when the query cannot be safely answered from the unique-key index.
+     *
+     * @return array{array<string, mixed>, list<PredicateNode>}|null
+     */
+    private function extractUniqueKeyLookup(): ?array
+    {
+        /** @var TModel $model */
+        $model = $this->getModel();
+        $store = resolve(IdentityMapStore::class);
+        $uniqueIndexes = $store->uniqueIndexesForModelClass($model::class);
+
+        if ($uniqueIndexes === []) {
+            return null;
+        }
+
+        $query = $this->getQuery();
+
+        if (
+            ($query->joins !== null && $query->joins !== [])
+            || ($query->unions !== null && $query->unions !== [])
+            || ($query->groups !== null && $query->groups !== [])
+            || ($query->havings !== null && $query->havings !== [])
+            || $query->lock !== null
+        ) {
+            return null;
+        }
+
+        /** @var array<int, array<string, mixed>> $wheres */
+        $wheres = $query->wheres;
+
+        if ($wheres === []) {
+            return null;
+        }
+
+        /** @var array<string, mixed> $equalityMap */
+        $equalityMap = [];
+
+        /** @var list<PredicateNode> $extraNodes */
+        $extraNodes = [];
+
+        foreach ($wheres as $where) {
+            $type = $where['type'] ?? null;
+            $column = $where['column'] ?? null;
+            $boolean = $where['boolean'] ?? null;
+
+            if ($this->isSafeGlobalScopeWhere($where)) {
+                continue;
+            }
+
+            if ($boolean !== 'and') {
+                return null;
+            }
+
+            if ($type === 'Basic' && is_string($column) && ($where['operator'] ?? null) === '=') {
+                if (array_key_exists($column, $equalityMap)) {
+                    return null;
+                }
+
+                $equalityMap[$column] = $where['value'] ?? null;
+
+                continue;
+            }
+
+            $node = PredicateExtractor::fromWhere($where);
+
+            if (! $node instanceof PredicateNode) {
+                return null;
+            }
+
+            $extraNodes[] = $node;
+        }
+
+        if ($equalityMap === []) {
+            return null;
+        }
+
+        foreach ($uniqueIndexes as $indexColumns) {
+            $allPresent = true;
+
+            foreach ($indexColumns as $col) {
+                if (! array_key_exists($col, $equalityMap)) {
+                    $allPresent = false;
+                    break;
+                }
+            }
+
+            if (! $allPresent) {
+                continue;
+            }
+
+            $uniqueKeyValues = [];
+            $remainingEquality = $equalityMap;
+
+            foreach ($indexColumns as $col) {
+                $uniqueKeyValues[$col] = $equalityMap[$col];
+                unset($remainingEquality[$col]);
+            }
+
+            $allExtraNodes = $extraNodes;
+
+            foreach ($remainingEquality as $col => $val) {
+                $allExtraNodes[] = new ComparisonNode($col, '=', $val);
+            }
+
+            return [$uniqueKeyValues, $allExtraNodes];
+        }
+
+        return null;
     }
 
     /**
