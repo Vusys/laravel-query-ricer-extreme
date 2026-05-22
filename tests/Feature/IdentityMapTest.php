@@ -422,4 +422,143 @@ final class IdentityMapTest extends TestCase
 
         $this->assertSame($storeA, $storeB);
     }
+
+    #[Test]
+    public function unqualified_pk_where_uses_map(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        User::find($user->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        User::query()->where('id', '=', $user->id)->first();
+
+        $this->assertSame(0, $queryCount, 'Explicit unqualified id= where should use the map');
+    }
+
+    #[Test]
+    public function where_clause_with_extra_filter_falls_through_to_sql(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        User::find($user->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        User::query()->where('id', $user->id)->where('name', 'Alice')->first();
+
+        $this->assertSame(1, $queryCount, 'Non-safe additional where should fall through to SQL');
+    }
+
+    #[Test]
+    public function multiple_pk_wheres_fall_through_to_sql(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        User::find($user->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        User::query()->where('id', $user->id)->where('id', $user->id)->first();
+
+        $this->assertSame(1, $queryCount, 'Two PK where clauses should fall through to SQL');
+    }
+
+    #[Test]
+    public function non_equal_operator_on_pk_falls_through_to_sql(): void
+    {
+        $user1 = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        $user2 = User::create(['name' => 'Bob', 'email' => 'bob@example.com']);
+        User::find($user1->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = User::query()->where('id', '!=', $user1->id)->first();
+
+        $this->assertSame(1, $queryCount, 'Non-equal operator should not extract PK for map lookup');
+        $this->assertSame($user2->id, $result?->id);
+    }
+
+    #[Test]
+    public function without_identity_map_does_not_mutate_original_builder(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        User::find($user->id);
+
+        $builder = User::query();
+        $builder->withoutIdentityMap();
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $builder->find($user->id);
+
+        $this->assertSame(0, $queryCount, 'withoutIdentityMap() must not disable the map on the original builder');
+    }
+
+    #[Test]
+    public function models_are_not_remembered_during_disabled_scope(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        $this->store->flush();
+
+        $this->store->disabled(function () use ($user): void {
+            User::find($user->id);
+        });
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        User::find($user->id);
+
+        $this->assertSame(1, $queryCount, 'Models retrieved in a disabled scope must not be written to the map');
+    }
+
+    #[Test]
+    public function disabled_restores_state_when_callback_throws(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        User::find($user->id);
+
+        try {
+            $this->store->disabled(function (): void {
+                throw new \RuntimeException('intentional');
+            });
+        } catch (\RuntimeException) {}
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        User::find($user->id);
+
+        $this->assertSame(0, $queryCount, 'disabled() must restore the previous state even when the callback throws');
+    }
+
+    #[Test]
+    public function explain_restores_capturing_state_when_callback_throws(): void
+    {
+        try {
+            $this->store->explain(function (): void {
+                throw new \RuntimeException('intentional');
+            });
+        } catch (\RuntimeException) {}
+
+        $this->assertFalse($this->store->isCapturing(), 'explain() must restore capturing state even when the callback throws');
+    }
 }
