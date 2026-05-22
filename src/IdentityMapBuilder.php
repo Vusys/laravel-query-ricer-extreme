@@ -110,7 +110,9 @@ class IdentityMapBuilder extends Builder
         $result = $this->whereKey($id)->first($columns);
 
         if ($result instanceof Model) {
-            $store->markAllColumnsKnown($result);
+            if ($columns === ['*']) {
+                $store->markAllColumnsKnown($result);
+            }
         } elseif ($result === null) {
             $store->recordAbsent(
                 connection: $connection,

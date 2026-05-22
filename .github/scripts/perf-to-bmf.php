@@ -17,7 +17,7 @@ while (($line = fgets(STDIN)) !== false) {
     }
 
     if (! preg_match(
-        '/::bench-end::\s+(\S.*?)\s\s+\S.*?\s+([0-9]+\.[0-9]+)\s+ms\s+([0-9]+)\s+queries/',
+        '/::bench-end::\s+(\S.*?)\s\s+\S.*?\s+([0-9]+(?:\.[0-9]+)?)\s+ms\s+([0-9]+)\s+quer(?:y|ies)/',
         $line,
         $match,
     )) {

@@ -156,8 +156,15 @@ final class IdentityMapStore
             return;
         }
 
-        $fingerprint = ScopeFingerprinter::fromModel($model);
-        $mapKey = $this->makeKey($model, $key, $fingerprint);
+        // deleted_at is set by the time this fires; use the pre-deletion fingerprint
+        $mapKey = $this->makeKeyFromParts(
+            $model->getConnectionName() ?? 'default',
+            $model::class,
+            $model->getTable(),
+            $model->getKeyName(),
+            $key,
+            'soft-delete:default',
+        );
 
         if (isset($this->entries[$mapKey])) {
             $this->entries[$mapKey]->state = LifecycleState::Deleted;

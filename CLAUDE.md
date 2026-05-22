@@ -25,7 +25,7 @@ Run a single test:
 ```bash
 vendor/bin/phpunit --filter test_method_name
 vendor/bin/phpunit tests/Feature/ExampleTest.php
-vendor/bin/phpunit testsuite Performance      # benchmarks (opt-in)
+vendor/bin/phpunit --testsuite Performance    # benchmarks (opt-in)
 ```
 
 Backend matrix — set `DB_CONNECTION` to one of `sqlite` (default), `mysql`, `mariadb`, `pgsql`. CI runs every PHP × Laravel × DB cell (24 total).
@@ -39,12 +39,12 @@ Backend matrix — set `DB_CONNECTION` to one of `sqlite` (default), `mysql`, `m
 
 ## Tests
 
-PHPUnit 12 with Orchestra Testbench. All tests extend `Vusys\QueryRicerExtreme\Tests\TestCase`.
+PHPUnit 12 with Orchestra Testbench.
 
 ### Test categories
-- `tests/Unit/` — pure-PHP unit tests (no DB).
-- `tests/Feature/` — DB-backed integration tests.
-- `tests/Performance/` — separate suite (`vendor/bin/phpunit testsuite Performance`). Not run on PR CI.
+- `tests/Unit/` — pure-PHP unit tests (no DB). Extend `PHPUnit\Framework\TestCase` directly — do **not** boot Laravel.
+- `tests/Feature/` — DB-backed integration tests. Extend `Vusys\QueryRicerExtreme\Tests\TestCase`.
+- `tests/Performance/` — separate suite (`vendor/bin/phpunit --testsuite Performance`). Not run on PR CI.
 
 ## Things to avoid
 

@@ -6,8 +6,8 @@ return [
     'enabled' => (bool) env('IDENTITY_MAP_ENABLED', true),
 
     /*
-     * identity               — only exact primary-key identity reuse
-     * primary_key_rewrite    — bounded primary-key query pruning (default)
+     * identity               — only exact primary-key identity reuse (current default)
+     * primary_key_rewrite    — bounded primary-key query pruning
      * predicate              — evaluate simple predicates against known models
      * unique_key             — positive unique-key hits
      * coverage               — answer whole query regions from memory

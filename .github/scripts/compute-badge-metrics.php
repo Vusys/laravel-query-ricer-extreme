@@ -17,6 +17,10 @@ if ($junitPath === null || $outDir === null || $matrixCellsArg === null) {
 }
 
 $matrixCells = (int) $matrixCellsArg;
+if (! ctype_digit($matrixCellsArg) || $matrixCells < 1) {
+    fwrite(STDERR, "matrix-cells must be a positive integer, got: {$matrixCellsArg}\n");
+    exit(1);
+}
 
 if (! is_file($junitPath)) {
     fwrite(STDERR, "JUnit file not found: {$junitPath}\n");
@@ -100,8 +104,12 @@ function writeBadge(string $path, string $label, string $message, string $color)
         'cacheSeconds' => 3600,
     ];
 
-    file_put_contents(
+    $written = file_put_contents(
         $path,
         json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)."\n"
     );
+    if ($written === false) {
+        fwrite(STDERR, "Failed to write badge file: {$path}\n");
+        exit(1);
+    }
 }

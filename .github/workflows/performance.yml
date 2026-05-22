@@ -18,7 +18,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   benchmark:
@@ -86,15 +85,24 @@ jobs:
           --health-retries=5
 
     steps:
-      - name: Skip if database not requested
-        if: github.event.inputs.database != 'all' && github.event.inputs.database != '' && github.event.inputs.database != matrix.db
+      - name: Check database filter
+        id: db_check
         run: |
-          echo "Skipping ${{ matrix.db }} — workflow input requested ${{ github.event.inputs.database }} only."
-          exit 0
+          INPUT="${{ github.event.inputs.database }}"
+          if [[ -n "$INPUT" && "$INPUT" != 'all' && "$INPUT" != '${{ matrix.db }}' ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Skipping ${{ matrix.db }} — workflow input requested ${INPUT} only."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        if: steps.db_check.outputs.skip != 'true'
+        with:
+          persist-credentials: false
 
       - name: Setup PHP
+        if: steps.db_check.outputs.skip != 'true'
         uses: shivammathur/setup-php@7c071dfe9dc99bdf297fa79cb49ea005b9fcadbc # v2
         with:
           php-version: ${{ matrix.php }}
@@ -103,11 +111,13 @@ jobs:
           tools: composer:v2
 
       - name: Configure Composer authentication
+        if: steps.db_check.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: composer config --global --auth github-oauth.github.com "$GH_TOKEN"
 
       - name: Cache Composer dependencies
+        if: steps.db_check.outputs.skip != 'true'
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ~/.composer/cache/files
@@ -116,6 +126,7 @@ jobs:
             composer-perf-php${{ matrix.php }}-laravel${{ matrix.laravel }}-
 
       - name: Pin matrix versions
+        if: steps.db_check.outputs.skip != 'true'
         run: |
           composer remove --dev --no-update larastan/larastan rector/rector driftingly/rector-laravel laravel/pint
           composer require --dev --no-update \
@@ -123,9 +134,11 @@ jobs:
             "orchestra/testbench:^${{ matrix.testbench }}"
 
       - name: Install dependencies
+        if: steps.db_check.outputs.skip != 'true'
         run: composer update --prefer-dist --no-interaction --no-progress
 
       - name: Run benchmarks
+        if: steps.db_check.outputs.skip != 'true'
         env:
           DB_CONNECTION: ${{ matrix.db_connection }}
           DB_HOST: ${{ matrix.db_host }}
@@ -140,6 +153,7 @@ jobs:
           stdbuf -oL -eL vendor/bin/phpunit --testsuite Performance --testdox 2>&1 | tee perf-output.txt
 
       - name: Upload raw results
+        if: steps.db_check.outputs.skip != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: perf-${{ matrix.db }}-${{ github.run_id }}
@@ -154,6 +168,9 @@ jobs:
       && needs.benchmark.result != 'skipped'
       && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
 
     steps:
       - name: Download all benchmark outputs

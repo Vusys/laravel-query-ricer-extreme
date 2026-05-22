@@ -55,6 +55,8 @@ final class AttributeKnowledge
                 $this->facts[$column]->originalValue = $value;
                 $this->facts[$column]->currentValue = $value;
                 $this->facts[$column]->isDirty = false;
+                $this->facts[$column]->confidence = FactConfidence::Certain;
+                $this->facts[$column]->source = FactSource::HydratedFromDatabase;
             } else {
                 $this->facts[$column] = new AttributeFact(
                     column: $column,
