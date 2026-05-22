@@ -16,6 +16,14 @@
     },
     mutators: {
         "@default": true,
+        // version is an internal counter never asserted in tests — not semantically observable
+        "Increment": {
+            "ignoreSourceCodeByRegex": ["->version\\+\\+"]
+        },
+        // isset() returns true for any non-null value, so true vs false is unobservable here
+        "TrueValue": {
+            "ignoreSourceCodeByRegex": ["absent\\[\\$mapKey\\] = true"]
+        },
     },
     minMsi: 0,
     minCoveredMsi: 0,

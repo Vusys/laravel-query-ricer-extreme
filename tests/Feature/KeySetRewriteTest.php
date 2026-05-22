@@ -363,6 +363,29 @@ final class KeySetRewriteTest extends TestCase
     }
 
     #[Test]
+    public function duplicate_where_in_on_pk_falls_through_to_sql(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        $bob = $this->createFresh('Bob', 'bob@example.com');
+
+        User::find($alice->id);
+        User::find($bob->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        // Two IN clauses on the same PK column — cannot safely optimise, must fall through.
+        $result = User::whereIn('id', [$alice->id, $bob->id])
+            ->whereIn('id', [$alice->id])
+            ->get();
+
+        $this->assertSame(1, $queryCount, 'Duplicate PK whereIn must fall through to SQL');
+        $this->assertCount(1, $result);
+    }
+
+    #[Test]
     public function key_set_fetched_model_is_served_from_memory_on_subsequent_find(): void
     {
         $alice = $this->createFresh('Alice', 'alice@example.com');

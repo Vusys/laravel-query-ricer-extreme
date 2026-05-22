@@ -606,6 +606,56 @@ final class IdentityMapTest extends TestCase
     }
 
     #[Test]
+    public function debug_stats_returns_current_counts(): void
+    {
+        $stats = $this->store->debugStats();
+
+        $this->assertSame(0, $stats['entries']);
+        $this->assertSame(0, $stats['absent']);
+        $this->assertFalse($stats['disabled']);
+
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        User::find(9999);
+
+        $stats = $this->store->debugStats();
+
+        $this->assertSame(1, $stats['entries']);
+        $this->assertSame(1, $stats['absent']);
+        $this->assertFalse($stats['disabled']);
+
+        $this->store->disabled(function (): void {
+            $inner = $this->store->debugStats();
+            $this->assertTrue($inner['disabled']);
+        });
+
+        unset($alice);
+    }
+
+    #[Test]
+    public function where_key_get_returns_empty_collection_for_absent_tracked_key(): void
+    {
+        User::find(9999);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = User::whereKey(9999)->get();
+
+        $this->assertSame(0, $queryCount, 'Absent-tracked key should produce empty collection without SQL via get()');
+        $this->assertCount(0, $result);
+    }
+
+    #[Test]
+    public function find_with_non_scalar_id_delegates_to_where_key(): void
+    {
+        $result = User::find(null);
+
+        $this->assertNull($result);
+    }
+
+    #[Test]
     public function find_via_sql_marks_all_columns_known_for_subsequent_find(): void
     {
         $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);

@@ -200,7 +200,7 @@ class IdentityMapBuilder extends Builder
         $keySetExtracted = $this->extractPrimaryKeySet();
 
         if ($keySetExtracted !== null) {
-            [$keySet, $inWhereIndex] = $keySetExtracted;
+            $keySet = $keySetExtracted;
 
             [$hits, , $unknownKeys] = $store->partitionKeySet(
                 connection: $connection,
@@ -306,7 +306,7 @@ class IdentityMapBuilder extends Builder
     }
 
     /**
-     * @return array{0: list<int|string>, 1: int}|null
+     * @return list<int|string>|null
      */
     private function extractPrimaryKeySet(): ?array
     {
@@ -324,9 +324,9 @@ class IdentityMapBuilder extends Builder
         $qualifiedKey = $model->getQualifiedKeyName();
         $unqualifiedKey = $model->getKeyName();
 
-        $inWhereIndex = null;
+        $inWhere = null;
 
-        foreach ($wheres as $index => $where) {
+        foreach ($wheres as $where) {
             $type = $where['type'] ?? null;
             $column = $where['column'] ?? null;
             $boolean = $where['boolean'] ?? null;
@@ -337,10 +337,10 @@ class IdentityMapBuilder extends Builder
                 && in_array($column, [$qualifiedKey, $unqualifiedKey], true)
                 && $boolean === 'and'
             ) {
-                if ($inWhereIndex !== null) {
+                if ($inWhere !== null) {
                     return null;
                 }
-                $inWhereIndex = $index;
+                $inWhere = $where;
 
                 continue;
             }
@@ -350,11 +350,11 @@ class IdentityMapBuilder extends Builder
             }
         }
 
-        if ($inWhereIndex === null) {
+        if ($inWhere === null) {
             return null;
         }
 
-        $values = $wheres[$inWhereIndex]['values'] ?? null;
+        $values = $inWhere['values'] ?? null;
 
         if (! is_array($values) || $values === []) {
             return null;
@@ -370,7 +370,7 @@ class IdentityMapBuilder extends Builder
             $keys[] = $value;
         }
 
-        return [$keys, $inWhereIndex];
+        return $keys;
     }
 
     /**
