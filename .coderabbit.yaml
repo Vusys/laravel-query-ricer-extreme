@@ -32,6 +32,9 @@ reviews:
         PHPUnit 12, Testbench-based. The `fuzzer` group is opt-in
         (`composer fuzz`) and configurable via FUZZER_SEEDS /
         FUZZER_STEPS / FUZZER_RUNS env vars.
+        tests/Unit/ files extend PHPUnit\Framework\TestCase directly —
+        they must NOT boot Laravel. Do not flag this as wrong; it is
+        intentional per CLAUDE.md.
     - path: '.github/workflows/**'
       instructions: |
         Tests run a 24-cell matrix (PHP 8.3/8.4/8.5 × Laravel 11/12/13
