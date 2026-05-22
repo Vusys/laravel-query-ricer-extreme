@@ -1,0 +1,13 @@
+/vendor
+/composer.lock
+/.phpunit.cache
+/.phpunit.result.cache
+/build
+.DS_Store
+
+# DIY docs site
+/site
+/docs-site/vendor
+
+# Internal planning docs — not published
+/.internal

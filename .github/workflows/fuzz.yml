@@ -1,0 +1,80 @@
+name: Fuzz
+
+on:
+  workflow_dispatch:
+    inputs:
+      seeds:
+        description: 'Comma-separated seeds, or "random" for non-deterministic exploration.'
+        required: false
+        default: '1,42,1337,9999,314159'
+      seed_count:
+        description: 'How many random seeds to emit when seeds=random.'
+        required: false
+        default: '10'
+      steps:
+        description: 'Per-seed step count (overrides default).'
+        required: false
+        default: ''
+      runs:
+        description: 'Per-seed run count (overrides default).'
+        required: false
+        default: ''
+  schedule:
+    - cron: '0 7 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    name: Fuzz (sqlite + PHP 8.4)
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@7c071dfe9dc99bdf297fa79cb49ea005b9fcadbc # v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, pdo_sqlite
+          coverage: none
+          tools: composer:v2
+
+      - name: Configure Composer authentication
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: composer config --global --auth github-oauth.github.com "$GH_TOKEN"
+
+      - name: Cache Composer dependencies
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: ~/.composer/cache/files
+          key: composer-fuzz-${{ hashFiles('composer.json') }}
+          restore-keys: |
+            composer-fuzz-
+
+      - name: Install dependencies
+        run: composer update --prefer-dist --no-interaction --no-progress
+
+      - name: Run fuzzers (workflow_dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          DB_CONNECTION: sqlite
+          FUZZER_SEEDS: ${{ inputs.seeds }}
+          FUZZER_SEED_COUNT: ${{ inputs.seed_count }}
+          FUZZER_STEPS: ${{ inputs.steps }}
+          FUZZER_RUNS: ${{ inputs.runs }}
+        run: composer fuzz
+
+      - name: Run fuzzers (scheduled — random seeds)
+        if: github.event_name == 'schedule'
+        env:
+          DB_CONNECTION: sqlite
+          FUZZER_SEEDS: random
+          FUZZER_SEED_COUNT: '20'
+          FUZZER_STEPS: '50'
+          FUZZER_RUNS: '12'
+        run: composer fuzz

@@ -1,0 +1,47 @@
+language: en-GB
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: true
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - master
+  path_filters:
+    - '!vendor/**'
+    - '!build/**'
+    - '!composer.lock'
+  pre_merge_checks:
+    docstrings:
+      mode: off
+  path_instructions:
+    - path: 'src/**'
+      instructions: |
+        PHP 8.3+ Laravel package. CI runs PHPStan level 9 (Larastan),
+        Pint, and Rector — assume all three pass before review. Inline
+        @phpstan-ignore comments and PHPStan baseline entries are
+        explicitly disallowed; flag any that creep in. Adding optional
+        parameters at the end of public method signatures is fine;
+        renaming or removing public API needs a deprecation discussion.
+        The package is pre-1.0 so backwards-compat breaks are acceptable
+        when called out.
+    - path: 'tests/**'
+      instructions: |
+        PHPUnit 12, Testbench-based. The `fuzzer` group is opt-in
+        (`composer fuzz`) and configurable via FUZZER_SEEDS /
+        FUZZER_STEPS / FUZZER_RUNS env vars.
+        tests/Unit/ files extend PHPUnit\Framework\TestCase directly —
+        they must NOT boot Laravel. Do not flag this as wrong; it is
+        intentional per CLAUDE.md.
+    - path: '.github/workflows/**'
+      instructions: |
+        Tests run a 24-cell matrix (PHP 8.3/8.4/8.5 × Laravel 11/12/13
+        × sqlite/mysql/mariadb/pgsql).
+
+chat:
+  auto_reply: true

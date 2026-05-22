@@ -1,0 +1,96 @@
+name: Badges
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  metrics:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@7c071dfe9dc99bdf297fa79cb49ea005b9fcadbc # v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, pdo_sqlite
+          coverage: none
+          tools: composer:v2
+
+      - name: Configure Composer authentication
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: composer config --global --auth github-oauth.github.com "$GH_TOKEN"
+
+      - name: Cache Composer dependencies
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: ~/.composer/cache/files
+          key: composer-badges-${{ hashFiles('composer.json') }}
+          restore-keys: |
+            composer-badges-
+
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress
+
+      - name: Run tests with JUnit log
+        env:
+          DB_CONNECTION: sqlite
+        run: vendor/bin/phpunit --log-junit junit.xml
+
+      - name: Compute matrix size from tests.yml
+        id: matrix
+        run: |
+          PHP_COUNT=$(yq '.jobs.test.strategy.matrix.php | length' .github/workflows/tests.yml)
+          LARAVEL_COUNT=$(yq '.jobs.test.strategy.matrix.laravel | length' .github/workflows/tests.yml)
+          DB_COUNT=$(yq '.jobs.test.strategy.matrix.db | length' .github/workflows/tests.yml)
+          CELLS=$((PHP_COUNT * LARAVEL_COUNT * DB_COUNT))
+          echo "cells=$CELLS" >> "$GITHUB_OUTPUT"
+          echo "Matrix size: $PHP_COUNT × $LARAVEL_COUNT × $DB_COUNT = $CELLS"
+
+      - name: Compute badge JSON
+        run: php .github/scripts/compute-badge-metrics.php junit.xml badges-out "${{ steps.matrix.outputs.cells }}"
+
+      - name: Publish to badges branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          mkdir -p /tmp/badge-staging
+          cp badges-out/*.json /tmp/badge-staging/
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git ls-remote --exit-code --heads origin badges >/dev/null 2>&1; then
+            git fetch origin badges --depth=1
+            git checkout badges
+            rm -f ./*.json
+          else
+            git checkout --orphan badges
+            git rm -rf . >/dev/null
+          fi
+
+          cp /tmp/badge-staging/*.json .
+          git add ./*.json
+
+          if git diff --cached --quiet; then
+            echo "Badges unchanged; nothing to commit."
+            exit 0
+          fi
+
+          git commit -m "chore(badges): refresh metrics from ${GITHUB_SHA::7}"
+          git push -u origin badges
