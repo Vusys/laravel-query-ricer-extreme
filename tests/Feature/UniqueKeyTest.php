@@ -267,10 +267,12 @@ final class UniqueKeyTest extends TestCase
             $queryCount++;
         });
 
-        $this->expectException(ModelNotFoundException::class);
-        User::where('email', 'ghost@example.com')->firstOrFail();
-
-        $this->assertSame(0, $queryCount, 'Absence tracked — should throw without SQL');
+        try {
+            User::where('email', 'ghost@example.com')->firstOrFail();
+            $this->fail('Expected ModelNotFoundException');
+        } catch (ModelNotFoundException) {
+            $this->assertSame(0, $queryCount, 'Absence tracked — should throw without SQL');
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -803,5 +805,85 @@ final class UniqueKeyTest extends TestCase
         $plan = $explanations[0];
         $this->assertSame(PlanType::ReturnExistsFromMemory, $plan->type);
         $this->assertFalse($plan->sqlExecuted);
+    }
+
+    // -----------------------------------------------------------------------
+    // exists() — absence recorded after SQL miss
+    // -----------------------------------------------------------------------
+
+    #[Test]
+    public function exists_records_absence_after_sql_miss(): void
+    {
+        // First exists() call hits SQL and returns false
+        $first = User::where('email', 'nobody@example.com')->exists();
+        $this->assertFalse($first);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        // Second call must be served from absence tracking
+        $second = User::where('email', 'nobody@example.com')->exists();
+        $this->assertFalse($second);
+        $this->assertSame(0, $queryCount, 'exists() absence must be tracked after first SQL miss');
+    }
+
+    // -----------------------------------------------------------------------
+    // offset / limit hazards
+    // -----------------------------------------------------------------------
+
+    #[Test]
+    public function offset_bypasses_unique_key_lookup(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        User::find($alice->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        // OFFSET > 0 means the unique row may be skipped — must not serve from cache
+        $result = User::where('email', 'alice@example.com')->offset(1)->first();
+        $this->assertSame(1, $queryCount, 'offset > 0 must bypass unique-key shortcut');
+        $this->assertNull($result);
+    }
+
+    #[Test]
+    public function limit_zero_bypasses_unique_key_lookup(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        User::find($alice->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        // LIMIT 0 always returns empty — must not serve from cache
+        $results = User::where('email', 'alice@example.com')->limit(0)->get();
+        $this->assertSame(1, $queryCount, 'limit 0 must bypass unique-key shortcut');
+        $this->assertCount(0, $results);
+    }
+
+    // -----------------------------------------------------------------------
+    // value() — served from unique-key cache
+    // -----------------------------------------------------------------------
+
+    #[Test]
+    public function value_served_from_unique_key_cache(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        User::find($alice->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $email = User::where('email', 'alice@example.com')->value('email');
+        $this->assertSame(0, $queryCount, 'value() must be served from unique-key cache');
+        $this->assertSame('alice@example.com', $email);
     }
 }

@@ -39,13 +39,14 @@ User::whereKey([1, 2, 3])->where('active', true)->get();
 // SQL: SELECT * FROM users WHERE id IN (3) AND active = 1
 ```
 
-**Unique-key queries** — `first()`, `firstOrFail()`, `sole()`, and `exists()` can be served from memory when the column is declared unique in config:
+**Unique-key queries** — `first()`, `firstOrFail()`, `sole()`, `value()`, and `exists()` can be served from memory when the column is declared unique in config:
 
 ```php
 User::find(1); // email = alice@example.com now in map
 
-User::where('email', 'alice@example.com')->first();   // no SQL
-User::where('email', 'alice@example.com')->exists();  // no SQL — true
+User::where('email', 'alice@example.com')->first();          // no SQL
+User::where('email', 'alice@example.com')->value('email');   // no SQL
+User::where('email', 'alice@example.com')->exists();         // no SQL — true
 ```
 
 Absent-key tracking means the package remembers which primary keys and unique-key values returned nothing from a previous query. If those same lookups are repeated under the same scope, no SQL is issued.
@@ -117,6 +118,7 @@ Once configured, any of the following can be served without SQL when the model i
 User::where('email', 'alice@example.com')->first();
 User::where('email', 'alice@example.com')->firstOrFail();
 User::where('email', 'alice@example.com')->sole();
+User::where('email', 'alice@example.com')->value('email');
 User::where('email', 'alice@example.com')->exists();
 ```
 

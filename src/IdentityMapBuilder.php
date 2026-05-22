@@ -533,7 +533,19 @@ class IdentityMapBuilder extends Builder
             return false;
         }
 
-        return parent::exists();
+        $result = parent::exists();
+
+        if (! $result && $extraNodes === []) {
+            $store->recordAbsentByUniqueKey(
+                connection: $connection,
+                modelClass: $model::class,
+                table: $model->getTable(),
+                fingerprint: $fingerprint,
+                equalityValues: $uniqueKeyValues,
+            );
+        }
+
+        return $result;
     }
 
     /**
@@ -564,6 +576,8 @@ class IdentityMapBuilder extends Builder
             || ($query->groups !== null && $query->groups !== [])
             || ($query->havings !== null && $query->havings !== [])
             || $query->lock !== null
+            || ($query->offset !== null && $query->offset > 0)
+            || ($query->limit !== null && $query->limit < 1)
         ) {
             return null;
         }
