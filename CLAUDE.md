@@ -48,19 +48,18 @@ PHPUnit 12 with Orchestra Testbench.
 
 ## Before every push
 
-Run all four checks locally and fix any failures before pushing. This keeps CI green and avoids noisy fix commits.
+Run all four checks locally before committing or pushing. CI runs the same commands and a failure there is just noise that could have been caught here.
 
 ```bash
-composer test          # must pass
-composer analyse       # must pass (PHPStan level 9, no errors)
-composer pint:check    # must pass — run `composer pint` to auto-fix, then re-check
-composer rector:check  # must pass — apply suggested changes, then re-check
+composer test        # must be green
+composer analyse     # must report no errors
+composer pint:check  # must pass (run composer pint to auto-fix, then re-check)
+composer rector:check # must report no changes (run composer rector to auto-fix, then re-check)
 ```
 
-If any check fails, fix it and re-run that check before pushing. Never push a commit that you know will fail CI.
+If any check fails, fix it before pushing. Do not bypass or skip checks.
 
 ## Things to avoid
 
 - Adding `@phpstan-ignore` comments or PHPStan baseline entries — explicitly disallowed.
 - Adding code comments explaining WHAT — only add when WHY is non-obvious.
-- Pushing without running the four pre-push checks above.
