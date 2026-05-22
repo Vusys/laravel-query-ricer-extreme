@@ -505,6 +505,249 @@ final class UniqueKeyTest extends TestCase
     }
 
     // -----------------------------------------------------------------------
+    // exists() — extra predicate matches (must be served from memory)
+    // -----------------------------------------------------------------------
+
+    #[Test]
+    public function exists_unique_key_with_extra_predicate_match(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com', active: true);
+        User::find($alice->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $exists = User::where('email', 'alice@example.com')->where('active', true)->exists();
+
+        $this->assertSame(0, $queryCount, 'Unique key + matching extra predicate must not execute SQL');
+        $this->assertTrue($exists);
+    }
+
+    // -----------------------------------------------------------------------
+    // Extra non-equality predicate (IS NULL / IN) on top of unique key
+    // -----------------------------------------------------------------------
+
+    #[Test]
+    public function extra_null_predicate_match_on_unique_key_query(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        // Load alice so her attributes (including deleted_at = null) are in the map
+        User::find($alice->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        // whereNull('deleted_at') is an extra predicate on top of the email unique key
+        $result = User::where('email', 'alice@example.com')->whereNull('deleted_at')->first();
+
+        $this->assertSame(0, $queryCount, 'IS NULL extra predicate evaluated in memory');
+        $this->assertNotNull($result);
+        $this->assertSame($alice->id, $result->id);
+    }
+
+    #[Test]
+    public function extra_in_predicate_match_on_unique_key_query(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com', active: true);
+        User::find($alice->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = User::where('email', 'alice@example.com')->whereIn('name', ['Alice', 'Bob'])->first();
+
+        $this->assertSame(0, $queryCount, 'IN extra predicate evaluated in memory');
+        $this->assertNotNull($result);
+        $this->assertSame($alice->id, $result->id);
+    }
+
+    #[Test]
+    public function extra_in_predicate_reject_on_unique_key_query(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        User::find($alice->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        // Alice's name is 'Alice', not in ['Bob', 'Charlie']
+        $result = User::where('email', 'alice@example.com')->whereIn('name', ['Bob', 'Charlie'])->first();
+
+        $this->assertSame(0, $queryCount, 'IN reject uniquely eliminates the candidate — no SQL');
+        $this->assertNull($result);
+    }
+
+    // -----------------------------------------------------------------------
+    // Absence NOT recorded when SQL returns a model (non-empty result)
+    // -----------------------------------------------------------------------
+
+    #[Test]
+    public function absence_not_recorded_when_sql_returns_a_model(): void
+    {
+        $this->createFresh('Alice', 'alice@example.com');
+
+        // First query: model not in map → SQL → returns alice
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result1 = User::where('email', 'alice@example.com')->first();
+        $this->assertNotNull($result1);
+        $this->assertSame(1, $queryCount);
+
+        // Flush the map so alice is no longer cached
+        $this->store->flush();
+        $queryCount = 0;
+
+        // Second query: must hit SQL again — absence should NOT have been recorded
+        $result2 = User::where('email', 'alice@example.com')->first();
+        $this->assertNotNull($result2);
+        $this->assertSame(1, $queryCount, 'Absence must not be recorded when SQL returned a model');
+    }
+
+    // -----------------------------------------------------------------------
+    // Hazard checks — joins and locks bypass unique-key shortcut
+    // -----------------------------------------------------------------------
+
+    #[Test]
+    public function join_bypasses_unique_key_lookup(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        User::find($alice->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = User::join('users as u2', 'users.id', '=', 'u2.id')
+            ->where('users.email', 'alice@example.com')
+            ->select('users.*')
+            ->first();
+
+        $this->assertSame(1, $queryCount, 'A query with a join must bypass the unique-key shortcut');
+        $this->assertNotNull($result);
+    }
+
+    #[Test]
+    public function lock_bypasses_unique_key_lookup(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        User::find($alice->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = User::where('email', 'alice@example.com')->lockForUpdate()->first();
+
+        $this->assertSame(1, $queryCount, 'A locking query must bypass the unique-key shortcut');
+        $this->assertNotNull($result);
+    }
+
+    // -----------------------------------------------------------------------
+    // Safe-scope where BEFORE the equality — continue must not become break
+    // -----------------------------------------------------------------------
+
+    #[Test]
+    public function safe_scope_where_before_equality_still_detected(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        User::find($alice->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        // Force the deleted_at IS NULL where to appear before the email equality
+        // by prepending it explicitly, simulating a scope applied before user wheres.
+        $result = User::whereNull('users.deleted_at')
+            ->where('email', 'alice@example.com')
+            ->first();
+
+        $this->assertSame(0, $queryCount, 'Safe-scope where before equality must not prevent unique-key detection');
+        $this->assertNotNull($result);
+        $this->assertSame($alice->id, $result->id);
+    }
+
+    // -----------------------------------------------------------------------
+    // Multiple configured indexes — second index used when first doesn't match
+    // -----------------------------------------------------------------------
+
+    #[Test]
+    public function second_unique_index_used_when_first_does_not_match_query(): void
+    {
+        // Two indexes: ['email', 'name'] (compound) and ['email'] (single).
+        // Query only has 'email', so compound index cannot match — single must be tried.
+        config(['query-ricer-extreme.models' => [
+            User::class => [
+                'unique' => [
+                    ['email', 'name'],  // first: needs both columns
+                    ['email'],          // second: needs only email
+                ],
+            ],
+        ]]);
+
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        User::find($alice->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = User::where('email', 'alice@example.com')->first();
+
+        $this->assertSame(0, $queryCount, 'Second index must be tried when first does not match');
+        $this->assertNotNull($result);
+        $this->assertSame($alice->id, $result->id);
+    }
+
+    // -----------------------------------------------------------------------
+    // Compound-key absence tracking — ksort must normalise column order
+    // -----------------------------------------------------------------------
+
+    #[Test]
+    public function compound_key_absence_tracked_regardless_of_column_order(): void
+    {
+        config(['query-ricer-extreme.models' => [
+            User::class => [
+                'unique' => [
+                    ['name', 'email'],
+                ],
+            ],
+        ]]);
+
+        // First query: compound key lookup returns null
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $first = User::where('name', 'Ghost')->where('email', 'ghost@example.com')->first();
+        $this->assertNull($first);
+        $this->assertSame(1, $queryCount);
+
+        $queryCount = 0;
+
+        // Second query: same compound key but columns specified in the opposite order
+        $second = User::where('email', 'ghost@example.com')->where('name', 'Ghost')->first();
+        $this->assertNull($second);
+        $this->assertSame(0, $queryCount, 'Compound-key absence must be found regardless of where-clause column order');
+    }
+
+    // -----------------------------------------------------------------------
     // withoutIdentityMap — bypass
     // -----------------------------------------------------------------------
 
