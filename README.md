@@ -10,6 +10,8 @@ After Eloquent hydrates a model, that model becomes a known fact for the current
 
 > Can this query be partially or fully answered from the models we already hold in memory?
 
+**Exact primary key** — zero SQL if already in memory:
+
 ```php
 $userA = User::find(1);
 $userB = User::find(1);
@@ -17,15 +19,29 @@ $userB = User::find(1);
 $userA === $userB; // true — no second query
 ```
 
-It can also answer `whereKey` queries from memory:
+**Key-set queries** — only unknown keys hit the database:
 
 ```php
-User::find(1);
-
-User::query()->whereKey(1)->first(); // memory — no SQL
+User::find([1, 2, 3, 4]);
+// Already in map: 1, 2. Confirmed absent: 3.
+// SQL: SELECT * FROM users WHERE id IN (4)
+// Result merged in original-key order: [user#1, user#2, null, user#4]
 ```
 
-This is not a cache. It is an **identity map plus query-elision planner**. Within a configured scope, hydrated model instances are the source of truth for their own known attributes and loaded relations.
+**Predicate evaluation** — extra `where` conditions evaluated in memory before SQL:
+
+```php
+// Map already holds user#1 (active=1) and user#2 (active=0).
+User::whereKey([1, 2, 3])->where('active', true)->get();
+// user#1: active == true → Match, returned from memory
+// user#2: active == false → Reject, excluded without SQL
+// user#3: not in map → queried
+// SQL: SELECT * FROM users WHERE id IN (3) AND active = 1
+```
+
+Absent-key tracking means the package remembers which primary keys returned `null` from a previous query. If those same keys are requested again under the same scope and conditions, no SQL is issued.
+
+This is not a cache. It is an **identity map plus query-elision planner**. Within a configured scope, hydrated model instances are the source of truth for their own known attributes.
 
 ## Installation
 
@@ -73,12 +89,29 @@ IdentityMap::disabled(function () {
 ### Explain a query decision
 
 ```php
-$explanations = IdentityMap::explain(fn () => User::find(1));
-// Plan: return_model_from_memory
+$explanations = IdentityMap::explain(fn () => User::whereKey([1, 2, 3])->where('active', true)->get());
+// Plan: rewrite_predicate_and_merge
 // Model: App\Models\User
-// Reason: exact-primary-key-hit
-// SQL executed: no
+// Memory keys: [1, 2]   ← evaluated in-memory (match or reject)
+// SQL keys: [3]          ← unknown, sent to database
+// Rejected keys: [2]     ← predicate evaluated to Reject
 ```
+
+## Supported in-memory predicates
+
+When a key-set query carries extra `where` conditions, the following are evaluated against cached attributes without touching the database:
+
+| Eloquent method | Operators |
+|---|---|
+| `where($col, $val)` / `where($col, '=', $val)` | `=` |
+| `where($col, '!=', $val)` / `where($col, '<>', $val)` | `!=`, `<>` |
+| `whereIn($col, [...])` | `IN` |
+| `whereNotIn($col, [...])` | `NOT IN` |
+| `whereNull($col)` | `IS NULL` |
+| `whereNotNull($col)` | `IS NOT NULL` |
+| Multiple `where` chained with `AND` | AND-tree |
+
+Anything the package cannot evaluate in memory falls through to SQL unchanged — unsupported operators (`>`, `<`, `LIKE`, `BETWEEN`), raw `whereRaw` clauses, `orWhere` conditions, and attributes not present on a partially loaded model.
 
 ## Scope model
 

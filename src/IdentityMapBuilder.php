@@ -8,8 +8,11 @@ use Illuminate\Contracts\Support\Arrayable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
+use Vusys\QueryRicerExtreme\Enums\EvaluationResult;
 use Vusys\QueryRicerExtreme\Enums\LifecycleState;
 use Vusys\QueryRicerExtreme\Enums\PlanType;
+use Vusys\QueryRicerExtreme\Predicate\AndNode;
+use Vusys\QueryRicerExtreme\Predicate\PredicateNode;
 
 /**
  * @template TModel of Model
@@ -196,11 +199,11 @@ class IdentityMapBuilder extends Builder
             }
         }
 
-        // --- bounded primary key-set lookup ---
-        $keySetExtracted = $this->extractPrimaryKeySet();
+        // --- bounded primary key-set lookup (with optional predicate pruning) ---
+        $extraction = $this->extractBoundedKeySet();
 
-        if ($keySetExtracted !== null) {
-            $keySet = $keySetExtracted;
+        if ($extraction !== null) {
+            [$keySet, $extraPredicateNodes] = $extraction;
 
             [$hits, , $unknownKeys] = $store->partitionKeySet(
                 connection: $connection,
@@ -212,31 +215,59 @@ class IdentityMapBuilder extends Builder
                 columns: $columns,
             );
 
-            $hitModels = [];
-            $hitKeys = [];
-            foreach ($hits as $hitKey => $hitEntry) {
-                /** @var TModel $hitModel */
-                $hitModel = $hitEntry->model;
-                $hitModels[] = $hitModel;
-                $hitKeys[] = $hitKey;
+            $memoryModels = [];
+            $memoryKeys = [];
+            $rejectedKeys = [];
+            $sqlKeys = $unknownKeys;
+
+            if ($extraPredicateNodes !== []) {
+                $evaluator = new PredicateEvaluator;
+                $predicate = new AndNode($extraPredicateNodes);
+
+                foreach ($hits as $hitKey => $hitEntry) {
+                    $result = $evaluator->evaluate($hitEntry->attributes, $predicate);
+
+                    if ($result === EvaluationResult::Match) {
+                        /** @var TModel $hitModel */
+                        $hitModel = $hitEntry->model;
+                        $memoryModels[] = $hitModel;
+                        $memoryKeys[] = $hitKey;
+                    } elseif ($result === EvaluationResult::Unknown) {
+                        $sqlKeys[] = $hitKey;
+                    } else {
+                        $rejectedKeys[] = $hitKey;
+                    }
+                }
+            } else {
+                foreach ($hits as $hitKey => $hitEntry) {
+                    /** @var TModel $hitModel */
+                    $hitModel = $hitEntry->model;
+                    $memoryModels[] = $hitModel;
+                    $memoryKeys[] = $hitKey;
+                }
             }
 
-            if ($unknownKeys === []) {
+            if ($sqlKeys === []) {
+                $planType = $extraPredicateNodes !== []
+                    ? PlanType::RewritePredicateAndMerge
+                    : PlanType::ReturnCollectionFromMemory;
+
                 $store->capture(new Explanation(
-                    type: PlanType::ReturnCollectionFromMemory,
+                    type: $planType,
                     modelClass: $model::class,
-                    reason: 'all-keys-known-or-absent',
+                    reason: $extraPredicateNodes !== [] ? 'predicate-pruned-all-known' : 'all-keys-known-or-absent',
                     sqlExecuted: false,
-                    memoryKeys: $hitKeys,
+                    memoryKeys: $memoryKeys,
+                    rejectedKeys: $rejectedKeys,
                 ));
 
-                return $this->mergeByInputOrder($hitModels, [], $keySet);
+                return $this->mergeByInputOrder($memoryModels, [], $keySet);
             }
 
-            // Rewrite the query: add a second whereKey constraint for only the unknown keys.
-            // The intersection of the original IN clause and this new one resolves to unknownKeys only.
+            // Rewrite: narrow to sql keys only (unknown + predicate-unknown hits).
+            // The builder already carries all extra predicates; whereKey further restricts to sqlKeys.
             $rewriteBuilder = $this->withoutIdentityMap();
-            $rewriteBuilder->whereKey($unknownKeys);
+            $rewriteBuilder->whereKey($sqlKeys);
 
             /** @var array<int, TModel> $fetched */
             $fetched = $rewriteBuilder->getModels($columns);
@@ -267,17 +298,22 @@ class IdentityMapBuilder extends Builder
                 }
             }
 
+            $planType = $extraPredicateNodes !== []
+                ? PlanType::RewritePredicateAndMerge
+                : PlanType::RewritePrimaryKeysAndMerge;
+
             $store->capture(new Explanation(
-                type: PlanType::RewritePrimaryKeysAndMerge,
+                type: $planType,
                 modelClass: $model::class,
-                reason: 'key-set-rewrite',
+                reason: $extraPredicateNodes !== [] ? 'predicate-prune-and-rewrite' : 'key-set-rewrite',
                 sqlExecuted: true,
-                knownKeys: $hitKeys,
-                missingKeys: $unknownKeys,
-                memoryKeys: $hitKeys,
+                knownKeys: $memoryKeys,
+                missingKeys: $sqlKeys,
+                memoryKeys: $memoryKeys,
+                rejectedKeys: $rejectedKeys,
             ));
 
-            return $this->mergeByInputOrder($hitModels, $fetched, $keySet);
+            return $this->mergeByInputOrder($memoryModels, $fetched, $keySet);
         }
 
         // --- fallthrough: execute SQL normally ---
@@ -306,9 +342,10 @@ class IdentityMapBuilder extends Builder
     }
 
     /**
-     * @return list<int|string>|null
+     * @return array{list<int|string>, list<PredicateNode>}|null
+     *                                                           Returns [keySet, extraPredicateNodes] where extraPredicateNodes is empty for pure key-set queries.
      */
-    private function extractPrimaryKeySet(): ?array
+    private function extractBoundedKeySet(): ?array
     {
         $query = $this->getQuery();
 
@@ -325,6 +362,7 @@ class IdentityMapBuilder extends Builder
         $unqualifiedKey = $model->getKeyName();
 
         $inWhere = null;
+        $extraPredicateNodes = [];
 
         foreach ($wheres as $where) {
             $type = $where['type'] ?? null;
@@ -345,9 +383,21 @@ class IdentityMapBuilder extends Builder
                 continue;
             }
 
-            if (! $this->isSafeGlobalScopeWhere($where)) {
+            if ($this->isSafeGlobalScopeWhere($where)) {
+                continue;
+            }
+
+            if ($boolean !== 'and') {
                 return null;
             }
+
+            $node = PredicateExtractor::fromWhere($where);
+
+            if (! $node instanceof PredicateNode) {
+                return null;
+            }
+
+            $extraPredicateNodes[] = $node;
         }
 
         if ($inWhere === null) {
@@ -370,7 +420,7 @@ class IdentityMapBuilder extends Builder
             $keys[] = $value;
         }
 
-        return $keys;
+        return [$keys, $extraPredicateNodes];
     }
 
     /**

@@ -24,6 +24,10 @@
         "TrueValue": {
             "ignoreSourceCodeByRegex": ["absent\\[\\$mapKey\\] = true"]
         },
+        // break vs continue after $found = true are equivalent — $found cannot be unset by remaining iterations
+        "Break_": {
+            "ignoreSourceCodeByRegex": ["break;"]
+        },
     },
     minMsi: 0,
     minCoveredMsi: 0,

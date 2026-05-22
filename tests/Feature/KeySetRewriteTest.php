@@ -324,7 +324,7 @@ final class KeySetRewriteTest extends TestCase
     }
 
     #[Test]
-    public function key_set_with_extra_non_pk_where_falls_through_to_sql(): void
+    public function key_set_with_extra_non_pk_where_evaluates_predicate_in_memory(): void
     {
         $alice = $this->createFresh('Alice', 'alice@example.com');
         $bob = $this->createFresh('Bob', 'bob@example.com');
@@ -339,8 +339,11 @@ final class KeySetRewriteTest extends TestCase
 
         $result = User::whereKey([$alice->id, $bob->id])->where('name', 'Alice')->get();
 
-        $this->assertSame(1, $queryCount, 'Key-set with extra non-PK where must fall through to SQL');
+        $this->assertSame(0, $queryCount, 'Key-set with known models and simple predicate should issue no SQL');
         $this->assertCount(1, $result);
+        $first = $result->first();
+        $this->assertNotNull($first);
+        $this->assertSame('Alice', $first->name);
     }
 
     #[Test]
