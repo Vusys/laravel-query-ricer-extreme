@@ -111,7 +111,7 @@ When a key-set query carries extra `where` conditions, the following are evaluat
 | `whereNotNull($col)` | `IS NOT NULL` |
 | Multiple `where` chained with `AND` | AND-tree |
 
-Anything the package cannot evaluate in memory falls through to SQL unchanged — unsupported operators (`>`, `<`, `LIKE`, `BETWEEN`), raw `whereRaw` clauses, `orWhere` conditions, and attributes not present on a partially-loaded model.
+Anything the package cannot evaluate in memory falls through to SQL unchanged — unsupported operators (`>`, `<`, `LIKE`, `BETWEEN`), raw `whereRaw` clauses, `orWhere` conditions, and attributes not present on a partially loaded model.
 
 ## Scope model
 

@@ -55,7 +55,7 @@ final class PredicateExtractor
         }
 
         foreach ($values as $v) {
-            if (! is_scalar($v) && $v !== null) {
+            if ($v === null || ! is_scalar($v)) {
                 return null;
             }
         }

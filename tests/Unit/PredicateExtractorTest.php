@@ -118,6 +118,34 @@ final class PredicateExtractorTest extends TestCase
     }
 
     #[Test]
+    public function in_node_with_null_value_in_list_returns_null(): void
+    {
+        // SQL: `x IN (1, NULL)` is UNKNOWN when x != 1 — fall back to SQL.
+        $node = PredicateExtractor::fromWhere([
+            'type' => 'In',
+            'column' => 'status',
+            'values' => ['active', null],
+            'boolean' => 'and',
+        ]);
+
+        $this->assertNull($node);
+    }
+
+    #[Test]
+    public function not_in_node_with_null_value_in_list_returns_null(): void
+    {
+        // SQL: `x NOT IN (1, NULL)` is always UNKNOWN — fall back to SQL.
+        $node = PredicateExtractor::fromWhere([
+            'type' => 'NotIn',
+            'column' => 'status',
+            'values' => ['disabled', null],
+            'boolean' => 'and',
+        ]);
+
+        $this->assertNull($node);
+    }
+
+    #[Test]
     public function extracts_null_node(): void
     {
         $node = PredicateExtractor::fromWhere([
