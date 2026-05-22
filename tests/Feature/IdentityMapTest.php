@@ -565,4 +565,129 @@ final class IdentityMapTest extends TestCase
 
         $this->assertFalse($this->store->isCapturing(), 'explain() must restore capturing state even when the callback throws');
     }
+
+    #[Test]
+    public function fallthrough_sql_marks_all_columns_known(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        $this->store->flush();
+
+        // Non-PK WHERE falls through to SQL. The returned model must be marked allColumnsKnown
+        // so that a subsequent find() can serve it from memory without re-querying.
+        User::where('name', 'Alice')->get();
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = User::find($alice->id);
+
+        $this->assertSame(0, $queryCount, 'Model returned from fallthrough SQL must be marked all-columns-known and served from memory');
+        $this->assertInstanceOf(User::class, $result);
+        $this->assertSame($alice->id, $result->id);
+    }
+
+    #[Test]
+    public function flush_for_model_class_clears_absent_entries(): void
+    {
+        User::find(9999);
+
+        $this->store->flush(User::class);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        User::find(9999);
+
+        $this->assertSame(1, $queryCount, 'flush(ModelClass) must clear absent entries for that class so the next find() issues SQL');
+    }
+
+    #[Test]
+    public function debug_stats_returns_current_counts(): void
+    {
+        $stats = $this->store->debugStats();
+
+        $this->assertSame(0, $stats['entries']);
+        $this->assertSame(0, $stats['absent']);
+        $this->assertFalse($stats['disabled']);
+
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        User::find(9999);
+
+        $stats = $this->store->debugStats();
+
+        $this->assertSame(1, $stats['entries']);
+        $this->assertSame(1, $stats['absent']);
+        $this->assertFalse($stats['disabled']);
+
+        $this->store->disabled(function (): void {
+            $inner = $this->store->debugStats();
+            $this->assertTrue($inner['disabled']);
+        });
+
+        unset($alice);
+    }
+
+    #[Test]
+    public function where_key_get_returns_empty_collection_for_absent_tracked_key(): void
+    {
+        User::find(9999);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = User::whereKey(9999)->get();
+
+        $this->assertSame(0, $queryCount, 'Absent-tracked key should produce empty collection without SQL via get()');
+        $this->assertCount(0, $result);
+    }
+
+    #[Test]
+    public function find_with_non_scalar_id_delegates_to_where_key(): void
+    {
+        $result = User::find(null);
+
+        $this->assertNull($result);
+    }
+
+    #[Test]
+    public function find_via_sql_marks_all_columns_known_for_subsequent_find(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        $this->store->flush();
+
+        // First find goes to SQL (alice not in map); must mark all columns known on the returned model.
+        User::find($alice->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        // Second find must be served from memory — impossible without allColumnsKnown being set.
+        $result = User::find($alice->id);
+
+        $this->assertSame(0, $queryCount, 'find() after SQL fetch must mark model all-columns-known so second find() needs no SQL');
+        $this->assertInstanceOf(User::class, $result);
+    }
+
+    #[Test]
+    public function explain_single_pk_via_where_returns_collection_from_memory(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+
+        $explanations = $this->store->explain(function () use ($alice): void {
+            User::query()->whereKey($alice->id)->get();
+        });
+
+        $this->assertCount(1, $explanations);
+        $this->assertSame('return_collection_from_memory', $explanations[0]->type->value);
+        $this->assertFalse($explanations[0]->sqlExecuted);
+        $this->assertContains($alice->id, $explanations[0]->memoryKeys);
+    }
 }

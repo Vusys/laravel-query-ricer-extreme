@@ -9,6 +9,7 @@
     },
     "require-dev": {
         "driftingly/rector-laravel": "^2.0",
+        "infection/infection": "^0.29",
         "larastan/larastan": "^2.9|^3.0",
         "laravel/pint": "^1.0",
         "orchestra/testbench": "^9.0|^10.0|^11.0",
@@ -35,7 +36,10 @@
     "minimum-stability": "stable",
     "prefer-stable": true,
     "config": {
-        "sort-packages": true
+        "sort-packages": true,
+        "allow-plugins": {
+            "infection/extension-installer": true
+        }
     },
     "scripts": {
         "analyse": "phpstan analyse",
@@ -47,6 +51,7 @@
         "test": "phpunit",
         "test:coverage": "XDEBUG_MODE=coverage phpunit --coverage-text",
         "test:coverage-html": "XDEBUG_MODE=coverage phpunit --coverage-html=build/coverage",
-        "fuzz": "phpunit --group fuzzer"
+        "fuzz": "phpunit --group fuzzer",
+        "mutate": "infection --threads=4 --no-progress"
     }
 }

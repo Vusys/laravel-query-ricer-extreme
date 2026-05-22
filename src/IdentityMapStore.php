@@ -268,6 +268,47 @@ final class IdentityMapStore
         }
     }
 
+    /**
+     * Partition a bounded key set into memory hits, absent keys, and unknown keys.
+     *
+     * @param  list<int|string>  $keys
+     * @param  list<string>  $columns
+     * @return array{0: array<int|string, IdentityEntry>, 1: list<int|string>, 2: list<int|string>}
+     */
+    public function partitionKeySet(
+        string $connection,
+        string $modelClass,
+        string $table,
+        string $primaryKeyName,
+        array $keys,
+        string $fingerprint,
+        array $columns,
+    ): array {
+        $hits = [];
+        $absentKeys = [];
+        $unknownKeys = [];
+
+        foreach ($keys as $key) {
+            $entry = $this->find($connection, $modelClass, $table, $primaryKeyName, $key, $fingerprint);
+
+            if ($entry instanceof IdentityEntry) {
+                if ($entry->state === LifecycleState::Exists && $entry->attributes->satisfies($columns)) {
+                    $hits[$key] = $entry;
+                } elseif ($entry->state === LifecycleState::Exists) {
+                    $unknownKeys[] = $key;
+                } else {
+                    $absentKeys[] = $key;
+                }
+            } elseif ($this->isAbsent($connection, $modelClass, $table, $primaryKeyName, $key, $fingerprint)) {
+                $absentKeys[] = $key;
+            } else {
+                $unknownKeys[] = $key;
+            }
+        }
+
+        return [$hits, $absentKeys, $unknownKeys];
+    }
+
     public function isDisabled(): bool
     {
         return $this->disabled;
