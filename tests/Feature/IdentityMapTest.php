@@ -11,6 +11,7 @@ use Vusys\QueryRicerExtreme\Enums\FactSource;
 use Vusys\QueryRicerExtreme\Knowledge\AttributeFact;
 use Vusys\QueryRicerExtreme\Knowledge\AttributeKnowledge;
 use Vusys\QueryRicerExtreme\Store\IdentityMapStore;
+use Vusys\QueryRicerExtreme\Tests\Models\Post;
 use Vusys\QueryRicerExtreme\Tests\Models\User;
 use Vusys\QueryRicerExtreme\Tests\TestCase;
 
@@ -24,6 +25,17 @@ final class IdentityMapTest extends TestCase
         parent::setUp();
         $this->store = resolve(IdentityMapStore::class);
         $this->store->flush();
+    }
+
+    private function countSql(callable $callback): int
+    {
+        $n = 0;
+        DB::listen(static function () use (&$n): void {
+            $n++;
+        });
+        $callback();
+
+        return $n;
     }
 
     #[Test]
@@ -835,5 +847,109 @@ final class IdentityMapTest extends TestCase
 
         $this->assertSame(1, $queryCount, 'A keyset query with LIMIT must hit SQL');
         $this->assertCount(1, $results);
+    }
+
+    #[Test]
+    public function withcount_find_always_executes_sql(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        Post::create(['user_id' => $alice->id, 'title' => 'Post 1', 'published' => true]);
+        $this->store->flush();
+
+        User::find($alice->id);
+
+        $sql = $this->countSql(function () use ($alice): void {
+            $u = User::withCount('posts')->find($alice->id);
+            $this->assertInstanceOf(User::class, $u);
+            $this->assertTrue(
+                $u->offsetExists('posts_count'),
+                'User is missing posts_count — was served from identity map without SQL',
+            );
+            $this->assertSame(1, (int) $u->posts_count);
+        });
+
+        $this->assertGreaterThan(0, $sql, 'withCount find() must execute SQL even when model is in the map');
+    }
+
+    #[Test]
+    public function absence_cleared_when_model_created_with_same_key(): void
+    {
+        $this->assertNull(User::find(9999));
+
+        DB::table('users')->insert([
+            'id' => 9999,
+            'name' => 'New',
+            'email' => 'new9999@example.com',
+            'active' => true,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $u = User::withoutIdentityMap()->find(9999);
+        $this->assertInstanceOf(User::class, $u);
+        $this->store->afterSaved($u);
+
+        $sql = $this->countSql(function (): void {
+            $found = User::find(9999);
+            $this->assertNotNull($found, 'User#9999 must be found — absence record must have been cleared');
+        });
+
+        $this->assertSame(0, $sql, 'User#9999 must be served from map after absence was cleared');
+    }
+
+    #[Test]
+    public function transaction_rollback_db_value_visible_after_flush(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        User::find($alice->id);
+
+        try {
+            DB::transaction(static function () use ($alice): never {
+                $alice->name = 'RolledBack';
+                $alice->save();
+                throw new \RuntimeException('intentional rollback');
+            });
+        } catch (\RuntimeException) {
+            // expected
+        }
+
+        $fromDb = User::withoutIdentityMap()->find($alice->id);
+        $this->assertInstanceOf(User::class, $fromDb);
+        $this->assertSame('Alice', $fromDb->name, 'DB must be rolled back correctly');
+
+        $this->store->flush();
+        $afterFlush = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $afterFlush);
+        $this->assertSame('Alice', $afterFlush->name, 'After flush(), find() must return the rolled-back DB value');
+    }
+
+    #[Test]
+    public function raw_db_update_bypassing_events_leaves_map_attribute_stale(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => true]);
+        User::find($alice->id);
+
+        DB::table('users')->where('id', $alice->id)->update(['active' => 0]);
+
+        $fromMap = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $fromMap);
+        $fromDb = User::withoutIdentityMap()->find($alice->id);
+        $this->assertInstanceOf(User::class, $fromDb);
+        $this->assertFalse((bool) $fromDb->active, 'DB has active=false after raw update');
+        $this->assertTrue((bool) $fromMap->active, 'Map still has stale active=true — raw updates bypass model events');
+    }
+
+    #[Test]
+    public function lock_for_update_always_executes_sql(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        User::find($alice->id);
+
+        $sql = $this->countSql(function () use ($alice): void {
+            $user = User::whereKey($alice->id)->lockForUpdate()->first();
+            $this->assertNotNull($user);
+        });
+
+        $this->assertGreaterThan(0, $sql, 'lockForUpdate() must always execute SQL — never serve from memory');
     }
 }

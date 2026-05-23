@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Vusys\QueryRicerExtreme\Tests\Feature;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Vusys\QueryRicerExtreme\Query\ScopeFingerprinter;
 use Vusys\QueryRicerExtreme\Tests\Models\User;
 use Vusys\QueryRicerExtreme\Tests\TestCase;
@@ -78,5 +79,19 @@ final class ScopeFingerprinterTest extends TestCase
             ScopeFingerprinter::fromModel($live),
             ScopeFingerprinter::fromModel($trashed),
         );
+    }
+
+    public function test_withoutglobalscope_query_produces_different_fingerprint(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => true]);
+
+        $default = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $default);
+
+        $withoutScope = User::withoutGlobalScope(SoftDeletingScope::class)->find($alice->id);
+        $this->assertInstanceOf(User::class, $withoutScope);
+
+        $this->assertSame($alice->id, $default->id);
+        $this->assertSame($alice->id, $withoutScope->id);
     }
 }

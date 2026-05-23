@@ -4,12 +4,15 @@ declare(strict_types=1);
 
 namespace Vusys\QueryRicerExtreme\Tests\Feature;
 
+use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Database\MultipleRecordsFoundException;
 use Illuminate\Support\Facades\DB;
 use PHPUnit\Framework\Attributes\Test;
 use Vusys\QueryRicerExtreme\Coverage\CoverageRegistry;
 use Vusys\QueryRicerExtreme\Enums\PlanType;
 use Vusys\QueryRicerExtreme\Explanation;
 use Vusys\QueryRicerExtreme\Store\IdentityMapStore;
+use Vusys\QueryRicerExtreme\Tests\Models\Post;
 use Vusys\QueryRicerExtreme\Tests\Models\User;
 use Vusys\QueryRicerExtreme\Tests\TestCase;
 
@@ -745,5 +748,181 @@ final class CoverageRegistryFeatureTest extends TestCase
         });
 
         $this->assertSame(1, $sql, 'first() ordered by a non-numeric column must fall through to SQL');
+    }
+
+    // -------------------------------------------------------------------------
+    // Non-string SELECT columns (withCount / selectRaw)
+    // -------------------------------------------------------------------------
+
+    #[Test]
+    public function withcount_not_served_from_coverage(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => true]);
+        User::create(['name' => 'Bob', 'email' => 'bob@example.com', 'active' => true]);
+        Post::create(['user_id' => $alice->id, 'title' => 'Post 1', 'published' => true]);
+
+        User::where('active', true)->get();
+        $this->assertGreaterThan(0, $this->registry->entryCount(), 'Pre-condition: coverage must exist');
+
+        $this->store->flush();
+        $this->registry->flush();
+        User::create(['name' => 'Carol', 'email' => 'carol@example.com', 'active' => true]);
+        User::where('active', true)->get();
+        $this->store->flush();
+
+        $sql = $this->countSql(function (): void {
+            $users = User::withCount('posts')->where('active', true)->get();
+            foreach ($users as $u) {
+                $this->assertTrue(
+                    $u->offsetExists('posts_count'),
+                    "User #{$u->id} is missing posts_count — was served from coverage without SQL",
+                );
+            }
+        });
+
+        $this->assertGreaterThan(0, $sql, 'withCount query must execute SQL, not be served from coverage');
+    }
+
+    #[Test]
+    public function selectraw_not_served_from_coverage(): void
+    {
+        User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => true]);
+
+        User::where('active', true)->get();
+        $this->store->flush();
+
+        $sql = $this->countSql(function (): void {
+            $results = User::selectRaw('*, 42 as magic_number')->where('active', true)->get();
+            foreach ($results as $u) {
+                $this->assertTrue(
+                    $u->offsetExists('magic_number'),
+                    "User #{$u->id} missing magic_number — served from coverage without SQL",
+                );
+            }
+        });
+
+        $this->assertGreaterThan(0, $sql, 'selectRaw query must not be served from coverage');
+    }
+
+    #[Test]
+    public function withcount_virtual_column_not_satisfied_by_all_columns_known(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => true]);
+        Post::create(['user_id' => $alice->id, 'title' => 'Post 1', 'published' => true]);
+
+        User::all();
+
+        $users = User::withCount('posts')->get();
+
+        foreach ($users as $u) {
+            $this->assertTrue(
+                $u->offsetExists('posts_count'),
+                "User #{$u->id} must have posts_count — virtual column must come from SQL",
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // GROUP BY must not create coverage
+    // -------------------------------------------------------------------------
+
+    #[Test]
+    public function group_by_query_does_not_create_coverage(): void
+    {
+        User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => true]);
+        User::create(['name' => 'Bob', 'email' => 'bob@example.com', 'active' => true]);
+
+        $before = $this->registry->entryCount();
+
+        User::select('active')->groupBy('active')->get();
+
+        $this->assertSame($before, $this->registry->entryCount(), 'GROUP BY must not create a coverage entry');
+    }
+
+    // -------------------------------------------------------------------------
+    // LIMIT prevents subsequent query from being served incorrectly
+    // -------------------------------------------------------------------------
+
+    #[Test]
+    public function limited_query_does_not_pollute_coverage(): void
+    {
+        User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => true]);
+        User::create(['name' => 'Bob', 'email' => 'bob@example.com', 'active' => true]);
+        User::create(['name' => 'Carol', 'email' => 'carol@example.com', 'active' => true]);
+
+        User::where('active', true)->limit(2)->get();
+
+        $sql = $this->countSql(function (): void {
+            $users = User::where('active', true)->get();
+            $this->assertCount(3, $users, 'All 3 active users must be returned — limited query must not pollute coverage');
+        });
+
+        $this->assertGreaterThan(0, $sql, 'Query after a limited fetch must execute SQL');
+    }
+
+    // -------------------------------------------------------------------------
+    // Mass-update invalidates coverage
+    // -------------------------------------------------------------------------
+
+    #[Test]
+    public function mass_update_invalidates_coverage(): void
+    {
+        User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => true]);
+        User::create(['name' => 'Bob', 'email' => 'bob@example.com', 'active' => true]);
+
+        User::where('active', true)->get();
+        $this->assertGreaterThan(0, $this->registry->entryCount());
+
+        User::where('active', true)->update(['active' => false]);
+
+        $this->assertSame(0, $this->registry->entryCount(), 'Coverage must be flushed after mass update');
+
+        $sql = $this->countSql(function (): void {
+            $users = User::where('active', false)->get();
+            $this->assertCount(2, $users, 'Both users must appear as inactive after mass update');
+        });
+
+        $this->assertGreaterThan(0, $sql, 'Query after mass update must hit the database');
+    }
+
+    // -------------------------------------------------------------------------
+    // sole() correctness via coverage
+    // -------------------------------------------------------------------------
+
+    #[Test]
+    public function sole_throws_multiple_records_found_when_coverage_has_multiple_matches(): void
+    {
+        User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => true]);
+        User::create(['name' => 'Bob', 'email' => 'bob@example.com', 'active' => true]);
+
+        User::where('active', true)->get();
+
+        $this->expectException(MultipleRecordsFoundException::class);
+
+        User::where('active', true)->sole();
+    }
+
+    #[Test]
+    public function sole_throws_model_not_found_when_coverage_has_no_matches(): void
+    {
+        User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => false]);
+
+        User::all();
+
+        $this->expectException(ModelNotFoundException::class);
+
+        User::where('active', true)->sole();
+    }
+
+    #[Test]
+    public function sole_returns_model_when_coverage_has_exactly_one_match(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => true]);
+        User::create(['name' => 'Bob', 'email' => 'bob@example.com', 'active' => false]);
+
+        User::all();
+
+        $found = User::where('active', true)->sole();
+        $this->assertSame($alice->id, $found->id);
     }
 }
