@@ -7,6 +7,9 @@ namespace Vusys\QueryRicerExtreme\Tests\Feature;
 use Illuminate\Support\Facades\DB;
 use PHPUnit\Framework\Attributes\Test;
 use Vusys\QueryRicerExtreme\Coverage\CoverageRegistry;
+use Vusys\QueryRicerExtreme\Predicate\AndNode;
+use Vusys\QueryRicerExtreme\Predicate\ComparisonNode;
+use Vusys\QueryRicerExtreme\Predicate\PredicateEvaluator;
 use Vusys\QueryRicerExtreme\Store\IdentityMapStore;
 use Vusys\QueryRicerExtreme\Tests\Models\Post;
 use Vusys\QueryRicerExtreme\Tests\Models\User;
@@ -397,5 +400,235 @@ final class MassWriteModelingTest extends TestCase
 
         $this->assertSame(0, $this->registry->entryCount(),
             'Mass delete must flush all coverage for the model class');
+    }
+
+    // =========================================================================
+    // Fallback paths: disabled store and unparseable predicates
+    // =========================================================================
+
+    #[Test]
+    public function mass_update_with_disabled_store_falls_back_to_full_flush(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => false]);
+        User::find($alice->id); // warm entry
+        User::all(); // coverage: AND([])
+
+        $this->assertSame(1, $this->store->debugStats()['entries']);
+        $this->assertSame(1, $this->registry->entryCount());
+
+        $this->store->disabled(function (): void {
+            User::where('active', false)->update(['active' => true]);
+        });
+
+        $this->assertSame(0, $this->store->debugStats()['entries'], 'Disabled store triggers full flush of identity store');
+        $this->assertSame(0, $this->registry->entryCount(), 'Disabled store triggers full flush of coverage registry');
+    }
+
+    #[Test]
+    public function mass_update_with_or_predicate_falls_back_to_full_flush(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => false]);
+        User::find($alice->id); // warm entry
+        User::where('name', 'Alice')->get(); // coverage: name = 'Alice'
+
+        $this->assertSame(1, $this->store->debugStats()['entries']);
+        $this->assertSame(1, $this->registry->entryCount());
+
+        // orWhere makes the predicate un-parseable → fallback to full flush
+        User::where('active', false)->orWhere('name', 'Alice')->update(['active' => true]);
+
+        $this->assertSame(0, $this->store->debugStats()['entries'], 'Unparseable predicate triggers full flush');
+        $this->assertSame(0, $this->registry->entryCount(), 'Unparseable predicate triggers full coverage flush');
+    }
+
+    #[Test]
+    public function mass_delete_with_disabled_store_falls_back_to_full_flush(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => false]);
+        User::find($alice->id); // warm entry
+
+        $this->assertSame(1, $this->store->debugStats()['entries']);
+
+        $this->store->disabled(function (): void {
+            User::where('active', false)->delete();
+        });
+
+        $this->assertSame(0, $this->store->debugStats()['entries'], 'Disabled store triggers full flush on mass delete');
+    }
+
+    #[Test]
+    public function mass_delete_with_or_predicate_falls_back_to_full_flush(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => false]);
+        User::find($alice->id); // warm entry
+
+        $this->assertSame(1, $this->store->debugStats()['entries']);
+
+        // orWhere makes the predicate un-parseable → fallback to full flush
+        User::where('active', false)->orWhere('name', 'Alice')->delete();
+
+        $this->assertSame(0, $this->store->debugStats()['entries'], 'Unparseable predicate triggers full flush on delete');
+    }
+
+    // =========================================================================
+    // applyMassUpdate: skips entries for other model classes (line 518)
+    // =========================================================================
+
+    #[Test]
+    public function mass_update_does_not_affect_entries_for_other_model_classes(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => true]);
+        $post = Post::create(['user_id' => $alice->id, 'title' => 'Draft', 'published' => false]);
+        User::find($alice->id); // warm User entry
+        Post::find($post->id);  // warm Post entry
+
+        $this->assertSame(2, $this->store->debugStats()['entries']);
+
+        User::where('active', true)->update(['active' => false]);
+
+        // Post entry must not be touched (different modelClass → continue at line 518)
+        $this->assertSame(2, $this->store->debugStats()['entries'], 'Post entry must survive a User mass update');
+
+        $sql = $this->countSql(function () use ($post): void {
+            $found = Post::find($post->id);
+            $this->assertNotNull($found, 'Post entry still served from memory');
+        });
+
+        $this->assertSame(0, $sql, 'Post served from memory — not evicted by User mass update');
+    }
+
+    // =========================================================================
+    // applyMassDelete: Unknown eviction for hard-delete model (lines 602, 607)
+    // =========================================================================
+
+    #[Test]
+    public function mass_hard_delete_unknown_evicts_partial_entry(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => true]);
+        $post = Post::create(['user_id' => $alice->id, 'title' => 'Draft', 'published' => false]);
+
+        // Flush after create so the entry has not yet stored 'published'.
+        $this->store->flush();
+
+        // Partial load — 'published' is not in the attribute facts.
+        Post::select('id', 'title')->get();
+
+        $this->assertSame(1, $this->store->debugStats()['entries']);
+
+        // Hard delete: predicate references 'published', which is absent from partial facts → Unknown → evict.
+        Post::where('published', false)->delete();
+
+        $this->assertSame(0, $this->store->debugStats()['entries'], 'Unknown entry must be evicted by hard mass delete');
+
+        $sql = $this->countSql(function () use ($post): void {
+            Post::find($post->id);
+        });
+
+        $this->assertGreaterThan(0, $sql, 'After eviction, find must hit SQL');
+    }
+
+    // =========================================================================
+    // applyMassDelete: skips non-Exists entries (line 588)
+    // =========================================================================
+
+    #[Test]
+    public function mass_delete_skips_already_soft_deleted_entry(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => false]);
+        User::find($alice->id); // warm entry (state = Exists)
+
+        // First delete: Alice matches, state → SoftDeleted, entry remains in store.
+        User::where('active', false)->delete();
+
+        $this->assertSame(1, $this->store->debugStats()['entries'], 'SoftDeleted entry still in store after first delete');
+
+        // Second delete: entry state is SoftDeleted (≠ Exists) → line 588 fires, entry skipped.
+        User::where('active', false)->delete();
+
+        // Entry still present (skipped, not evicted) and still absent from default scope.
+        $this->assertSame(1, $this->store->debugStats()['entries'], 'SoftDeleted entry survives second delete (skipped by line 588)');
+        $this->assertNull(User::find($alice->id), 'Soft-deleted user still returns null from absence tracking');
+    }
+
+    // =========================================================================
+    // applyMassUpdate / applyMassDelete: disabled early-return (lines 511, 578)
+    // =========================================================================
+
+    #[Test]
+    public function apply_mass_update_is_no_op_when_store_is_disabled(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => false]);
+        User::find($alice->id); // warm entry
+
+        $this->assertSame(1, $this->store->debugStats()['entries']);
+
+        // Call applyMassUpdate directly while the store is disabled — must return early.
+        $this->store->disabled(function (): void {
+            $this->store->applyMassUpdate(
+                User::class,
+                new ComparisonNode('active', '=', false),
+                ['active' => true],
+                new PredicateEvaluator,
+            );
+        });
+
+        // Entry must be unchanged (applyMassUpdate returned early).
+        $this->assertSame(1, $this->store->debugStats()['entries']);
+        $found = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $found);
+        $this->assertFalse((bool) $found->active, 'active must remain false — applyMassUpdate was a no-op');
+    }
+
+    #[Test]
+    public function apply_mass_delete_is_no_op_when_store_is_disabled(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => false]);
+        User::find($alice->id); // warm entry
+
+        $this->assertSame(1, $this->store->debugStats()['entries']);
+
+        // Call applyMassDelete directly while the store is disabled — must return early.
+        $this->store->disabled(function (): void {
+            $this->store->applyMassDelete(
+                User::class,
+                new AndNode([]),
+                new PredicateEvaluator,
+                true,
+            );
+        });
+
+        // Entry must be unchanged (applyMassDelete returned early).
+        $this->assertSame(1, $this->store->debugStats()['entries']);
+        $this->assertInstanceOf(User::class, User::find($alice->id));
+    }
+
+    // =========================================================================
+    // HasIdentityMap::saved — flushByColumns (line 75)
+    // =========================================================================
+
+    #[Test]
+    public function save_flushes_coverage_selectively_via_has_identity_map_saved_callback(): void
+    {
+        User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => true]);
+        User::where('name', 'Alice')->get(); // coverage: name = 'Alice'
+        User::where('active', true)->get();  // coverage: active = true
+        $this->assertSame(2, $this->registry->entryCount());
+
+        // Return the model stored in the coverage/identity-map entry.
+        $alice = User::where('name', 'Alice')->first();
+        $this->assertNotNull($alice);
+
+        // Flush the identity store so applyMassUpdate (called during save's performUpdate)
+        // finds no matching entry and does NOT call setRawAttributes(sync=true) on $alice.
+        // That keeps $alice dirty after the SQL runs, so getChanges() returns ['name', ...]
+        // in the saved callback, exercising flushByColumns at HasIdentityMap line 75.
+        $this->store->flush();
+
+        $alice->name = 'Alicia';
+        $alice->save();
+
+        // name='Alice' entry flushed by HasIdentityMap::saved line 75; active=true preserved.
+        $this->assertSame(1, $this->registry->entryCount(),
+            'Only the coverage entry referencing name must be flushed');
     }
 }
