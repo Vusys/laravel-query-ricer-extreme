@@ -328,8 +328,43 @@ final class ProcessTruthTest extends TestCase
 
         $result = User::where('email', 'alice@example.com')->get();
 
-        $this->assertSame(0, $queryCount, 'Email unchanged — unique-key hit should still work');
+        // process-truth always bypasses the unique-key cache to avoid drift-in correctness issues
+        $this->assertSame(1, $queryCount, 'process-truth always falls through for unique-key lookups');
         $this->assertCount(1, $result);
+    }
+
+    #[Test]
+    public function unique_key_lookup_bypasses_stale_absence_in_process_truth(): void
+    {
+        config([
+            'query-ricer-extreme.models' => [
+                User::class => ['unique' => [['email']]],
+            ],
+        ]);
+
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+
+        User::find($alice->id);
+
+        // Prime the absence cache for an email no one has yet.
+        User::where('email', 'new@example.com')->get();
+
+        // Dirty alice's email to the previously-absent value (drift-in).
+        $aliceLive = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $aliceLive);
+        $aliceLive->email = 'new@example.com';
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        // process-truth must not serve from stale absence; SQL must execute.
+        $result = User::where('email', 'new@example.com')->get();
+
+        $this->assertSame(1, $queryCount, 'stale absence cache must be bypassed in process-truth');
+        // DB still holds alice@example.com, so the SQL returns nothing.
+        $this->assertCount(0, $result);
     }
 
     // -----------------------------------------------------------------------

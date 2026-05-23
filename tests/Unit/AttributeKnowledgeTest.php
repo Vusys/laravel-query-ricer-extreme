@@ -118,6 +118,33 @@ final class AttributeKnowledgeTest extends TestCase
         $this->assertFalse($knowledge->satisfies(['*', 'id']));
     }
 
+    #[Test]
+    public function sync_from_model_skips_columns_absent_from_model_attributes(): void
+    {
+        $knowledge = new AttributeKnowledge;
+        $fact = $this->makeFact('phantom', 'original');
+        $knowledge->set('phantom', $fact);
+
+        // Model whose getAttributes() does not include 'phantom'.
+        $model = new class extends Model
+        {
+            public function getAttributes(): array
+            {
+                return ['id' => 1];
+            }
+
+            public function isDirty($attributes = null): bool
+            {
+                return false;
+            }
+        };
+
+        $knowledge->syncFromModel($model);
+
+        // 'phantom' not in model attributes — fact must be unchanged.
+        $this->assertSame('original', $knowledge->get('phantom')?->currentValue);
+    }
+
     private function makeFact(string $column, mixed $value): AttributeFact
     {
         return new AttributeFact(

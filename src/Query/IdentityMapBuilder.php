@@ -356,9 +356,9 @@ class IdentityMapBuilder extends Builder
             );
 
             $processTruth = $this->isProcessTruth();
-            $uniqueEntry = $this->revalidateUniqueEntry($uniqueEntry, $uniqueKeyValues, $processTruth);
+            $uniqueEntry = $this->revalidateUniqueEntry($uniqueEntry, $processTruth);
 
-            if ($uniqueEntry instanceof \Vusys\QueryRicerExtreme\Store\IdentityEntry && $uniqueEntry->state === LifecycleState::Exists && $uniqueEntry->attributes->satisfies($columns)) {
+            if ($uniqueEntry instanceof IdentityEntry && $uniqueEntry->state === LifecycleState::Exists && $uniqueEntry->attributes->satisfies($columns)) {
                 if ($extraNodes !== []) {
                     $evaluator = new PredicateEvaluator;
                     $evalResult = $evaluator->evaluate($uniqueEntry->attributes, new AndNode($extraNodes), $processTruth);
@@ -405,7 +405,7 @@ class IdentityMapBuilder extends Builder
                 }
             }
 
-            if ($extraNodes === [] && $store->isAbsentByUniqueKey(
+            if ($extraNodes === [] && ! $processTruth && $store->isAbsentByUniqueKey(
                 connection: $connection,
                 modelClass: $model::class,
                 table: $model->getTable(),
@@ -524,9 +524,9 @@ class IdentityMapBuilder extends Builder
         );
 
         $processTruth = $this->isProcessTruth();
-        $entry = $this->revalidateUniqueEntry($entry, $uniqueKeyValues, $processTruth);
+        $entry = $this->revalidateUniqueEntry($entry, $processTruth);
 
-        if ($entry instanceof \Vusys\QueryRicerExtreme\Store\IdentityEntry && $entry->state === LifecycleState::Exists) {
+        if ($entry instanceof IdentityEntry && $entry->state === LifecycleState::Exists) {
             if ($extraNodes !== []) {
                 $evaluator = new PredicateEvaluator;
                 $evalResult = $evaluator->evaluate($entry->attributes, new AndNode($extraNodes), $processTruth);
@@ -566,7 +566,7 @@ class IdentityMapBuilder extends Builder
             return true;
         }
 
-        if ($extraNodes === [] && $store->isAbsentByUniqueKey(
+        if ($extraNodes === [] && ! $processTruth && $store->isAbsentByUniqueKey(
             connection: $connection,
             modelClass: $model::class,
             table: $model->getTable(),
@@ -996,31 +996,12 @@ class IdentityMapBuilder extends Builder
     }
 
     /**
-     * Sync and revalidate a unique-key entry against the queried values under process-truth.
-     *
-     * When process-truth is active, the stored unique-key index may be stale if the indexed
-     * column was mutated after load. This method syncs currentValue from the live model and
-     * verifies each queried column still matches — returning null if any column has drifted.
-     *
-     * @param  array<string, mixed>  $uniqueKeyValues
+     * Under process-truth, the unique-key index is built from original values and cannot
+     * reliably reflect current (dirty) state, including drift-in. Always force SQL.
      */
-    private function revalidateUniqueEntry(?IdentityEntry $entry, array $uniqueKeyValues, bool $processTruth): ?IdentityEntry
+    private function revalidateUniqueEntry(?IdentityEntry $entry, bool $processTruth): ?IdentityEntry
     {
-        if (! $processTruth || !$entry instanceof \Vusys\QueryRicerExtreme\Store\IdentityEntry) {
-            return $entry;
-        }
-
-        $entry->attributes->syncFromModel($entry->model);
-
-        foreach ($uniqueKeyValues as $col => $val) {
-            $fact = $entry->attributes->get($col);
-            // phpcs:ignore SlevomatCodingStandard.Operators.DisallowEqualOperators
-            if (!$fact instanceof \Vusys\QueryRicerExtreme\Knowledge\AttributeFact || $fact->currentValue != $val) {
-                return null;
-            }
-        }
-
-        return $entry;
+        return $processTruth ? null : $entry;
     }
 
     private function isProcessTruth(): bool
