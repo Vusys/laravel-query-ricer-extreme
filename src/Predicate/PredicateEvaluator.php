@@ -10,18 +10,18 @@ use Vusys\QueryRicerExtreme\Knowledge\AttributeKnowledge;
 
 final class PredicateEvaluator
 {
-    public function evaluate(AttributeKnowledge $attributes, PredicateNode $node): EvaluationResult
+    public function evaluate(AttributeKnowledge $attributes, PredicateNode $node, bool $processTruth = false): EvaluationResult
     {
         return match (true) {
-            $node instanceof AndNode => $this->evaluateAnd($attributes, $node),
-            $node instanceof ComparisonNode => $this->evaluateComparison($attributes, $node),
-            $node instanceof InNode => $this->evaluateIn($attributes, $node),
-            $node instanceof NullNode => $this->evaluateNull($attributes, $node),
+            $node instanceof AndNode => $this->evaluateAnd($attributes, $node, $processTruth),
+            $node instanceof ComparisonNode => $this->evaluateComparison($attributes, $node, $processTruth),
+            $node instanceof InNode => $this->evaluateIn($attributes, $node, $processTruth),
+            $node instanceof NullNode => $this->evaluateNull($attributes, $node, $processTruth),
             default => EvaluationResult::Unknown,
         };
     }
 
-    private function evaluateAnd(AttributeKnowledge $attributes, AndNode $node): EvaluationResult
+    private function evaluateAnd(AttributeKnowledge $attributes, AndNode $node, bool $processTruth): EvaluationResult
     {
         if ($node->children === []) {
             return EvaluationResult::Match;
@@ -30,7 +30,7 @@ final class PredicateEvaluator
         $hasUnknown = false;
 
         foreach ($node->children as $child) {
-            $result = $this->evaluate($attributes, $child);
+            $result = $this->evaluate($attributes, $child, $processTruth);
 
             if ($result === EvaluationResult::Reject) {
                 return EvaluationResult::Reject;
@@ -44,7 +44,7 @@ final class PredicateEvaluator
         return $hasUnknown ? EvaluationResult::Unknown : EvaluationResult::Match;
     }
 
-    private function evaluateComparison(AttributeKnowledge $attributes, ComparisonNode $node): EvaluationResult
+    private function evaluateComparison(AttributeKnowledge $attributes, ComparisonNode $node, bool $processTruth): EvaluationResult
     {
         $fact = $attributes->get($node->column);
 
@@ -52,7 +52,7 @@ final class PredicateEvaluator
             return EvaluationResult::Unknown;
         }
 
-        $attrValue = $fact->originalValue;
+        $attrValue = $processTruth ? $fact->currentValue : $fact->originalValue;
         $predicateValue = $node->value;
 
         // phpcs:ignore SlevomatCodingStandard.Operators.DisallowEqualOperators
@@ -67,7 +67,7 @@ final class PredicateEvaluator
         };
     }
 
-    private function evaluateIn(AttributeKnowledge $attributes, InNode $node): EvaluationResult
+    private function evaluateIn(AttributeKnowledge $attributes, InNode $node, bool $processTruth): EvaluationResult
     {
         $fact = $attributes->get($node->column);
 
@@ -75,7 +75,7 @@ final class PredicateEvaluator
             return EvaluationResult::Unknown;
         }
 
-        $attrValue = $fact->originalValue;
+        $attrValue = $processTruth ? $fact->currentValue : $fact->originalValue;
         $found = false;
 
         foreach ($node->values as $value) {
@@ -93,7 +93,7 @@ final class PredicateEvaluator
         return $found ? EvaluationResult::Match : EvaluationResult::Reject;
     }
 
-    private function evaluateNull(AttributeKnowledge $attributes, NullNode $node): EvaluationResult
+    private function evaluateNull(AttributeKnowledge $attributes, NullNode $node, bool $processTruth): EvaluationResult
     {
         $fact = $attributes->get($node->column);
 
@@ -101,7 +101,8 @@ final class PredicateEvaluator
             return EvaluationResult::Unknown;
         }
 
-        $isNull = $fact->originalValue === null;
+        $attrValue = $processTruth ? $fact->currentValue : $fact->originalValue;
+        $isNull = $attrValue === null;
 
         // negated = IS NOT NULL
         if ($node->negated) {

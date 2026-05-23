@@ -70,6 +70,20 @@ final class AttributeKnowledge
         }
     }
 
+    public function syncFromModel(Model $model): void
+    {
+        $currentAttributes = $model->getAttributes();
+
+        foreach ($this->facts as $column => $fact) {
+            if (! array_key_exists($column, $currentAttributes)) {
+                continue;
+            }
+
+            $fact->currentValue = $currentAttributes[$column];
+            $fact->isDirty = $model->isDirty($column);
+        }
+    }
+
     /** @param list<string>|array<int, string> $columns */
     public function satisfies(array $columns): bool
     {

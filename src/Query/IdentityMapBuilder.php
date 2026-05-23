@@ -236,9 +236,14 @@ class IdentityMapBuilder extends Builder
             if ($extraPredicateNodes !== []) {
                 $evaluator = new PredicateEvaluator;
                 $predicate = new AndNode($extraPredicateNodes);
+                $processTruth = $this->isProcessTruth();
 
                 foreach ($hits as $hitKey => $hitEntry) {
-                    $result = $evaluator->evaluate($hitEntry->attributes, $predicate);
+                    if ($processTruth) {
+                        $hitEntry->attributes->syncFromModel($hitEntry->model);
+                    }
+
+                    $result = $evaluator->evaluate($hitEntry->attributes, $predicate, $processTruth);
 
                     if ($result === EvaluationResult::Match) {
                         /** @var TModel $hitModel */
@@ -350,10 +355,24 @@ class IdentityMapBuilder extends Builder
                 equalityValues: $uniqueKeyValues,
             );
 
+            $processTruth = $this->isProcessTruth();
+
+            if ($processTruth && $uniqueEntry !== null) {
+                $uniqueEntry->attributes->syncFromModel($uniqueEntry->model);
+                foreach ($uniqueKeyValues as $col => $val) {
+                    $fact = $uniqueEntry->attributes->get($col);
+                    // phpcs:ignore SlevomatCodingStandard.Operators.DisallowEqualOperators
+                    if ($fact === null || $fact->currentValue != $val) {
+                        $uniqueEntry = null;
+                        break;
+                    }
+                }
+            }
+
             if ($uniqueEntry !== null && $uniqueEntry->state === LifecycleState::Exists && $uniqueEntry->attributes->satisfies($columns)) {
                 if ($extraNodes !== []) {
                     $evaluator = new PredicateEvaluator;
-                    $evalResult = $evaluator->evaluate($uniqueEntry->attributes, new AndNode($extraNodes));
+                    $evalResult = $evaluator->evaluate($uniqueEntry->attributes, new AndNode($extraNodes), $processTruth);
 
                     if ($evalResult === EvaluationResult::Reject) {
                         $store->capture(new Explanation(
@@ -515,10 +534,24 @@ class IdentityMapBuilder extends Builder
             equalityValues: $uniqueKeyValues,
         );
 
+        $processTruth = $this->isProcessTruth();
+
+        if ($processTruth && $entry !== null) {
+            $entry->attributes->syncFromModel($entry->model);
+            foreach ($uniqueKeyValues as $col => $val) {
+                $fact = $entry->attributes->get($col);
+                // phpcs:ignore SlevomatCodingStandard.Operators.DisallowEqualOperators
+                if ($fact === null || $fact->currentValue != $val) {
+                    $entry = null;
+                    break;
+                }
+            }
+        }
+
         if ($entry !== null && $entry->state === LifecycleState::Exists) {
             if ($extraNodes !== []) {
                 $evaluator = new PredicateEvaluator;
-                $evalResult = $evaluator->evaluate($entry->attributes, new AndNode($extraNodes));
+                $evalResult = $evaluator->evaluate($entry->attributes, new AndNode($extraNodes), $processTruth);
 
                 if ($evalResult === EvaluationResult::Reject) {
                     $store->capture(new Explanation(
@@ -802,6 +835,7 @@ class IdentityMapBuilder extends Builder
 
         $pkName = $model->getKeyName();
         $evaluator = new PredicateEvaluator;
+        $processTruth = $this->isProcessTruth();
         $result = [];
 
         foreach ($entry->primaryKeys as $pk) {
@@ -815,7 +849,11 @@ class IdentityMapBuilder extends Builder
                 return null;
             }
 
-            $evalResult = $evaluator->evaluate($mapEntry->attributes, $region);
+            if ($processTruth) {
+                $mapEntry->attributes->syncFromModel($mapEntry->model);
+            }
+
+            $evalResult = $evaluator->evaluate($mapEntry->attributes, $region, $processTruth);
 
             if ($evalResult === EvaluationResult::Unknown) {
                 return null;
@@ -977,5 +1015,10 @@ class IdentityMapBuilder extends Builder
         });
 
         return $models[0];
+    }
+
+    private function isProcessTruth(): bool
+    {
+        return config('query-ricer-extreme.attribute_truth', 'database_only') === 'process_truth';
     }
 }
