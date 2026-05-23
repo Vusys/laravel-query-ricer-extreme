@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\MultipleRecordsFoundException;
 use Illuminate\Support\Collection as SupportCollection;
 use Vusys\QueryRicerExtreme\Coverage\ColumnSet;
@@ -802,25 +803,65 @@ class IdentityMapBuilder extends Builder
     #[\Override]
     public function update(array $values): mixed
     {
-        resolve(CoverageRegistry::class)->flushModelClass($this->getModel()::class);
+        $store = resolve(IdentityMapStore::class);
+        $registry = resolve(CoverageRegistry::class);
+        $modelClass = $this->getModel()::class;
 
-        return parent::update($values);
+        $predicate = $store->isDisabled()
+            ? null
+            : (new QueryPatternExtractor($this))->extractFullPredicate();
+
+        $result = parent::update($values);
+
+        if ($predicate instanceof PredicateNode) {
+            $store->applyMassUpdate($modelClass, $predicate, $values, new PredicateEvaluator);
+            $registry->flushByColumns($modelClass, array_keys($values));
+        } else {
+            $store->flush($modelClass);
+            $registry->flushModelClass($modelClass);
+        }
+
+        return $result;
     }
 
     #[\Override]
     public function delete(): mixed
     {
-        resolve(CoverageRegistry::class)->flushModelClass($this->getModel()::class);
+        $store = resolve(IdentityMapStore::class);
+        $registry = resolve(CoverageRegistry::class);
+        $modelClass = $this->getModel()::class;
+        $usesSoftDeletes = in_array(SoftDeletes::class, class_uses_recursive($modelClass), true);
 
-        return parent::delete();
+        $predicate = $store->isDisabled()
+            ? null
+            : (new QueryPatternExtractor($this))->extractFullPredicate();
+
+        $result = parent::delete();
+
+        if ($predicate instanceof PredicateNode) {
+            $store->applyMassDelete($modelClass, $predicate, new PredicateEvaluator, $usesSoftDeletes);
+        } else {
+            $store->flush($modelClass);
+        }
+
+        $registry->flushModelClass($modelClass);
+
+        return $result;
     }
 
     #[\Override]
     public function forceDelete(): mixed
     {
-        resolve(CoverageRegistry::class)->flushModelClass($this->getModel()::class);
+        $store = resolve(IdentityMapStore::class);
+        $registry = resolve(CoverageRegistry::class);
+        $modelClass = $this->getModel()::class;
 
-        return parent::forceDelete();
+        $result = parent::forceDelete();
+
+        $store->flush($modelClass);
+        $registry->flushModelClass($modelClass);
+
+        return $result;
     }
 
     /**

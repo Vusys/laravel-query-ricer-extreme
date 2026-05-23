@@ -65,7 +65,16 @@ trait HasIdentityMap
 
         static::saved(function (Model $model): void {
             resolve(IdentityMapStore::class)->afterSaved($model);
-            resolve(CoverageRegistry::class)->flushModelClass($model::class);
+
+            if ($model->wasRecentlyCreated) {
+                resolve(CoverageRegistry::class)->flushModelClass($model::class);
+            } else {
+                $changedColumns = array_keys($model->getChanges());
+
+                if ($changedColumns !== []) {
+                    resolve(CoverageRegistry::class)->flushByColumns($model::class, $changedColumns);
+                }
+            }
         });
 
         static::deleted(function (Model $model): void {

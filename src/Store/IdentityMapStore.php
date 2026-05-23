@@ -7,11 +7,16 @@ namespace Vusys\QueryRicerExtreme\Store;
 use Closure;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Vusys\QueryRicerExtreme\Enums\EvaluationResult;
+use Vusys\QueryRicerExtreme\Enums\FactConfidence;
+use Vusys\QueryRicerExtreme\Enums\FactSource;
 use Vusys\QueryRicerExtreme\Enums\LifecycleState;
 use Vusys\QueryRicerExtreme\Explanation;
 use Vusys\QueryRicerExtreme\Knowledge\AttributeFact;
 use Vusys\QueryRicerExtreme\Knowledge\AttributeKnowledge;
 use Vusys\QueryRicerExtreme\Knowledge\RelationKnowledge;
+use Vusys\QueryRicerExtreme\Predicate\PredicateEvaluator;
+use Vusys\QueryRicerExtreme\Predicate\PredicateNode;
 use Vusys\QueryRicerExtreme\Query\ScopeFingerprinter;
 
 final class IdentityMapStore
@@ -484,6 +489,123 @@ final class IdentityMapStore
         $uniqueFp = $this->uniqueKeyIndex->makeFingerprint($connection, $modelClass, $table, $fingerprint, $equalityValues);
 
         $this->uniqueKeyIndex->recordAbsent($uniqueFp);
+    }
+
+    /**
+     * Apply a mass-update to mapped entries for $modelClass without going to SQL.
+     *
+     * Entries whose predicate evaluates to Match have $values applied to their
+     * attribute facts and underlying model object.  Unknown entries are evicted
+     * (we cannot guarantee their post-update state).  Rejected entries are left
+     * untouched.
+     *
+     * @param  array<string, mixed>  $values
+     */
+    public function applyMassUpdate(
+        string $modelClass,
+        PredicateNode $predicate,
+        array $values,
+        PredicateEvaluator $evaluator,
+    ): void {
+        if ($this->disabled) {
+            return;
+        }
+
+        $keysToEvict = [];
+
+        foreach ($this->entries as $mapKey => $entry) {
+            if ($entry->modelClass !== $modelClass) {
+                continue;
+            }
+            if ($entry->state !== LifecycleState::Exists) {
+                continue;
+            }
+            $evalResult = $evaluator->evaluate($entry->attributes, $predicate);
+
+            if ($evalResult === EvaluationResult::Match) {
+                $rawAttrs = $entry->model->getAttributes();
+
+                foreach ($values as $col => $val) {
+                    $rawAttrs[$col] = $val;
+
+                    $existing = $entry->attributes->get($col);
+
+                    if ($existing instanceof AttributeFact) {
+                        $existing->originalValue = $val;
+                        $existing->currentValue = $val;
+                        $existing->isDirty = false;
+                        $existing->confidence = FactConfidence::Certain;
+                        $existing->source = FactSource::MassWrite;
+                    } else {
+                        $entry->attributes->set($col, new AttributeFact(
+                            column: $col,
+                            originalValue: $val,
+                            currentValue: $val,
+                            isDirty: false,
+                            confidence: FactConfidence::Certain,
+                            source: FactSource::MassWrite,
+                        ));
+                    }
+                }
+
+                $entry->model->setRawAttributes($rawAttrs, true);
+                $entry->version++;
+                $this->uniqueKeyIndex->index($entry, $mapKey);
+            } elseif ($evalResult === EvaluationResult::Unknown) {
+                $keysToEvict[] = $mapKey;
+            }
+        }
+
+        foreach ($keysToEvict as $key) {
+            unset($this->entries[$key]);
+        }
+    }
+
+    /**
+     * Apply a mass-delete to mapped entries for $modelClass without going to SQL.
+     *
+     * Entries that Match the predicate are marked Deleted (or SoftDeleted with
+     * absence tracking for soft-delete models).  Unknown entries are evicted.
+     * Rejected entries are left untouched.
+     */
+    public function applyMassDelete(
+        string $modelClass,
+        PredicateNode $predicate,
+        PredicateEvaluator $evaluator,
+        bool $softDeletes,
+    ): void {
+        if ($this->disabled) {
+            return;
+        }
+
+        $keysToEvict = [];
+
+        foreach ($this->entries as $mapKey => $entry) {
+            if ($entry->modelClass !== $modelClass) {
+                continue;
+            }
+            if ($entry->state !== LifecycleState::Exists) {
+                continue;
+            }
+            $evalResult = $evaluator->evaluate($entry->attributes, $predicate);
+
+            if ($evalResult === EvaluationResult::Match) {
+                if ($softDeletes) {
+                    $entry->state = LifecycleState::SoftDeleted;
+                    $this->absent[$mapKey] = true;
+                } else {
+                    $entry->state = LifecycleState::Deleted;
+                }
+
+                $entry->version++;
+            } elseif ($evalResult === EvaluationResult::Unknown) {
+                $keysToEvict[] = $mapKey;
+            }
+        }
+
+        foreach ($keysToEvict as $key) {
+            unset($this->entries[$key]);
+        }
     }
 
     /** @return array<string, mixed> */

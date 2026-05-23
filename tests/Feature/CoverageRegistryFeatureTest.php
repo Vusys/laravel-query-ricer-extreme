@@ -387,36 +387,38 @@ final class CoverageRegistryFeatureTest extends TestCase
     #[Test]
     public function save_flushes_coverage_for_model_class(): void
     {
-        $this->seedUsers();
-        $this->assertSame(1, $this->registry->entryCount());
+        // Record coverage for two different regions: one referencing 'name', one not.
+        User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => true]);
+        User::where('name', 'Alice')->get();  // region: name = 'Alice'
+        User::where('active', true)->get();   // region: active = true
+
+        $this->assertSame(2, $this->registry->entryCount());
 
         $alice = User::where('name', 'Alice')->first();
         $this->assertNotNull($alice);
-        $this->store->flush();
-        $this->registry->flush();
-        User::all();
-
         $alice->name = 'Alicia';
         $alice->save();
 
-        $this->assertSame(0, $this->registry->entryCount());
+        // Only the coverage region referencing 'name' is flushed; the 'active' region survives.
+        $this->assertSame(1, $this->registry->entryCount(),
+            'Only coverage regions referencing changed columns should be flushed');
     }
 
     #[Test]
     public function save_causes_next_query_to_hit_sql(): void
     {
         $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => true]);
-        User::all();
+        User::where('name', 'Alice')->get(); // record coverage for the name column
 
         $alice->name = 'Alicia';
         $alice->save();
 
-        // Coverage is gone, so next query must hit SQL.
+        // Coverage for 'name' is gone after the rename; the name query must hit SQL.
         $sql = $this->countSql(function (): void {
-            User::where('active', true)->get();
+            User::where('name', 'Alice')->get();
         });
 
-        $this->assertGreaterThan(0, $sql, 'After save, coverage is invalidated and SQL should run');
+        $this->assertGreaterThan(0, $sql, 'After name change, coverage for name is invalidated and SQL should run');
     }
 
     // -------------------------------------------------------------------------
@@ -426,26 +428,33 @@ final class CoverageRegistryFeatureTest extends TestCase
     #[Test]
     public function mass_update_flushes_coverage(): void
     {
+        // seedUsers() records coverage for AND([]) via User::all().
+        // Updating 'active' only flushes coverage entries whose region references 'active'.
+        // AND([]) has no columns in its region, so it is preserved.
         $this->seedUsers();
         $this->assertSame(1, $this->registry->entryCount());
 
         User::where('active', false)->update(['active' => true]);
 
-        $this->assertSame(0, $this->registry->entryCount());
+        $this->assertSame(1, $this->registry->entryCount(),
+            'Coverage for AND([]) is preserved when updating a column not present in its region');
     }
 
     #[Test]
-    public function mass_update_causes_next_query_to_hit_sql(): void
+    public function mass_update_updates_identity_store_and_serves_from_memory(): void
     {
+        // seedUsers(): Alice (active=true), Bob (active=false); coverage AND([]).
         $this->seedUsers();
 
         User::where('active', false)->update(['active' => true]);
 
+        // Coverage AND([]) preserved; Bob's identity entry updated.
         $sql = $this->countSql(function (): void {
-            User::where('active', true)->get();
+            $users = User::where('active', true)->get();
+            $this->assertCount(2, $users, 'Both users should be active after mass update');
         });
 
-        $this->assertGreaterThan(0, $sql, 'After mass update, coverage must be re-fetched from SQL');
+        $this->assertSame(0, $sql, 'After mass update, identity map serves correct results without SQL');
     }
 
     // -------------------------------------------------------------------------

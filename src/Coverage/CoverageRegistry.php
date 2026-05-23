@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Vusys\QueryRicerExtreme\Coverage;
 
+use Vusys\QueryRicerExtreme\Predicate\PredicateColumns;
 use Vusys\QueryRicerExtreme\Predicate\PredicateNode;
 
 final class CoverageRegistry
@@ -59,6 +60,39 @@ final class CoverageRegistry
         $this->entries = array_values(array_filter(
             $this->entries,
             static fn (CoverageEntry $e): bool => $e->modelClass !== $modelClass,
+        ));
+    }
+
+    /**
+     * Flush only coverage entries for $modelClass whose region predicate references
+     * at least one of the given columns. Entries whose regions are disjoint from the
+     * changed columns are preserved.
+     *
+     * @param  list<string>  $changedColumns
+     */
+    public function flushByColumns(string $modelClass, array $changedColumns): void
+    {
+        if ($changedColumns === []) {
+            return;
+        }
+
+        $this->entries = array_values(array_filter(
+            $this->entries,
+            static function (CoverageEntry $e) use ($modelClass, $changedColumns): bool {
+                if ($e->modelClass !== $modelClass) {
+                    return true;
+                }
+
+                $regionColumns = PredicateColumns::fromNode($e->region);
+
+                foreach ($changedColumns as $col) {
+                    if (in_array($col, $regionColumns, true)) {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
         ));
     }
 

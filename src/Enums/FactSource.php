@@ -11,5 +11,6 @@ enum FactSource: string
     case CastedModelAttribute = 'casted-model-attribute';
     case AppendedAttribute = 'appended-attribute';
     case RelationDerived = 'relation-derived';
+    case MassWrite = 'mass-write';
     case Unknown = 'unknown';
 }

@@ -11,6 +11,8 @@ use Vusys\QueryRicerExtreme\Coverage\CoverageEntry;
 use Vusys\QueryRicerExtreme\Coverage\CoverageRegistry;
 use Vusys\QueryRicerExtreme\Predicate\AndNode;
 use Vusys\QueryRicerExtreme\Predicate\ComparisonNode;
+use Vusys\QueryRicerExtreme\Predicate\InNode;
+use Vusys\QueryRicerExtreme\Predicate\NullNode;
 use Vusys\QueryRicerExtreme\Predicate\PredicateNode;
 
 final class CoverageRegistryTest extends TestCase
@@ -210,5 +212,83 @@ final class CoverageRegistryTest extends TestCase
         $result = $this->registry->findCovering('App\\User', 'default', 'users', 'fp', $query);
 
         $this->assertSame($entry, $result);
+    }
+
+    // -------------------------------------------------------------------------
+    // flushByColumns
+    // -------------------------------------------------------------------------
+
+    #[Test]
+    public function flush_by_columns_removes_entries_whose_region_references_changed_column(): void
+    {
+        $this->registry->record($this->makeEntry(region: new ComparisonNode('active', '=', true)));
+        $this->registry->record($this->makeEntry(region: new ComparisonNode('name', '=', 'Alice')));
+        $this->assertSame(2, $this->registry->entryCount());
+
+        $this->registry->flushByColumns('App\\User', ['active']);
+
+        $this->assertSame(1, $this->registry->entryCount());
+    }
+
+    #[Test]
+    public function flush_by_columns_preserves_entries_with_unrelated_regions(): void
+    {
+        $this->registry->record($this->makeEntry(region: new ComparisonNode('name', '=', 'Alice')));
+        $this->registry->record($this->makeEntry(region: new AndNode([])));
+        $this->assertSame(2, $this->registry->entryCount());
+
+        $this->registry->flushByColumns('App\\User', ['active']);
+
+        $this->assertSame(2, $this->registry->entryCount());
+    }
+
+    #[Test]
+    public function flush_by_columns_removes_and_node_containing_changed_column(): void
+    {
+        $region = new AndNode([
+            new ComparisonNode('active', '=', true),
+            new ComparisonNode('role', '=', 'admin'),
+        ]);
+        $this->registry->record($this->makeEntry(region: $region));
+        $this->assertSame(1, $this->registry->entryCount());
+
+        $this->registry->flushByColumns('App\\User', ['role']);
+
+        $this->assertSame(0, $this->registry->entryCount());
+    }
+
+    #[Test]
+    public function flush_by_columns_is_a_no_op_for_empty_column_list(): void
+    {
+        $this->registry->record($this->makeEntry(region: new ComparisonNode('active', '=', true)));
+        $this->assertSame(1, $this->registry->entryCount());
+
+        $this->registry->flushByColumns('App\\User', []);
+
+        $this->assertSame(1, $this->registry->entryCount());
+    }
+
+    #[Test]
+    public function flush_by_columns_does_not_touch_other_model_classes(): void
+    {
+        $this->registry->record($this->makeEntry(modelClass: 'App\\Post', region: new ComparisonNode('active', '=', true)));
+        $this->registry->record($this->makeEntry(modelClass: 'App\\User', region: new ComparisonNode('active', '=', true)));
+        $this->assertSame(2, $this->registry->entryCount());
+
+        $this->registry->flushByColumns('App\\User', ['active']);
+
+        $this->assertSame(1, $this->registry->entryCount());
+    }
+
+    #[Test]
+    public function flush_by_columns_handles_in_node_and_null_node(): void
+    {
+        $this->registry->record($this->makeEntry(region: new InNode('status', ['a', 'b'], false)));
+        $this->registry->record($this->makeEntry(region: new NullNode('deleted_at', false)));
+        $this->assertSame(2, $this->registry->entryCount());
+
+        $this->registry->flushByColumns('App\\User', ['status']);
+
+        $this->assertSame(1, $this->registry->entryCount());
     }
 }
