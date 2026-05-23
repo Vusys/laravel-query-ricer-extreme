@@ -535,7 +535,7 @@ class IdentityMapBuilder extends Builder
 
         $result = parent::exists();
 
-        if (! $result && $extraNodes === []) {
+        if (! $result && $extraNodes === [] && (bool) config('query-ricer-extreme.absence_tracking.unique_key', true)) {
             $store->recordAbsentByUniqueKey(
                 connection: $connection,
                 modelClass: $model::class,
