@@ -36,49 +36,35 @@ jobs:
 
     name: "PHP ${{ matrix.php }} / Laravel ${{ matrix.laravel }} / ${{ matrix.db }}"
 
-    services:
-      mysql:
-        image: mysql:8.0
-        env:
-          MYSQL_ROOT_PASSWORD: password
-          MYSQL_DATABASE: testing
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mysqladmin ping -h127.0.0.1 -uroot -ppassword"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
-
-      mariadb:
-        image: mariadb:lts
-        env:
-          MARIADB_ROOT_PASSWORD: password
-          MARIADB_DATABASE: testing
-        ports:
-          - 3307:3306
-        options: >-
-          --health-cmd="healthcheck.sh --connect --innodb_initialized"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=10
-          --health-start-period=30s
-
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: password
-          POSTGRES_DB: testing
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd="pg_isready -U postgres"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
-
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Start database
+        if: matrix.db != 'sqlite'
+        run: |
+          case "${{ matrix.db }}" in
+            mysql)
+              docker run -d --name database \
+                -e MYSQL_ROOT_PASSWORD=password \
+                -e MYSQL_DATABASE=testing \
+                -p 3306:3306 \
+                mysql:8.0
+              ;;
+            mariadb)
+              docker run -d --name database \
+                -e MARIADB_ROOT_PASSWORD=password \
+                -e MARIADB_DATABASE=testing \
+                -p 3307:3306 \
+                mariadb:lts
+              ;;
+            pgsql)
+              docker run -d --name database \
+                -e POSTGRES_PASSWORD=password \
+                -e POSTGRES_DB=testing \
+                -p 5432:5432 \
+                postgres:16
+              ;;
+          esac
 
       - name: Setup PHP
         uses: shivammathur/setup-php@7c071dfe9dc99bdf297fa79cb49ea005b9fcadbc # v2
@@ -110,6 +96,21 @@ jobs:
 
       - name: Install dependencies
         run: composer update --prefer-dist --no-interaction --no-progress
+
+      - name: Wait for database
+        if: matrix.db != 'sqlite'
+        run: |
+          case "${{ matrix.db }}" in
+            mysql)
+              timeout 60 bash -c 'until docker exec database mysqladmin ping -h127.0.0.1 -uroot -ppassword --silent 2>/dev/null; do sleep 2; done'
+              ;;
+            mariadb)
+              timeout 90 bash -c 'until docker exec database healthcheck.sh --connect --innodb_initialized 2>/dev/null; do sleep 2; done'
+              ;;
+            pgsql)
+              timeout 60 bash -c 'until docker exec database pg_isready -U postgres -q 2>/dev/null; do sleep 2; done'
+              ;;
+          esac
 
       - name: Run tests
         env:
@@ -145,49 +146,35 @@ jobs:
 
     name: "Comprehensive data providers (PHP 8.5 / L13 / ${{ matrix.db }})"
 
-    services:
-      mysql:
-        image: mysql:8.0
-        env:
-          MYSQL_ROOT_PASSWORD: password
-          MYSQL_DATABASE: testing
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mysqladmin ping -h127.0.0.1 -uroot -ppassword"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
-
-      mariadb:
-        image: mariadb:lts
-        env:
-          MARIADB_ROOT_PASSWORD: password
-          MARIADB_DATABASE: testing
-        ports:
-          - 3307:3306
-        options: >-
-          --health-cmd="healthcheck.sh --connect --innodb_initialized"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=10
-          --health-start-period=30s
-
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: password
-          POSTGRES_DB: testing
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd="pg_isready -U postgres"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
-
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Start database
+        if: matrix.db != 'sqlite'
+        run: |
+          case "${{ matrix.db }}" in
+            mysql)
+              docker run -d --name database \
+                -e MYSQL_ROOT_PASSWORD=password \
+                -e MYSQL_DATABASE=testing \
+                -p 3306:3306 \
+                mysql:8.0
+              ;;
+            mariadb)
+              docker run -d --name database \
+                -e MARIADB_ROOT_PASSWORD=password \
+                -e MARIADB_DATABASE=testing \
+                -p 3307:3306 \
+                mariadb:lts
+              ;;
+            pgsql)
+              docker run -d --name database \
+                -e POSTGRES_PASSWORD=password \
+                -e POSTGRES_DB=testing \
+                -p 5432:5432 \
+                postgres:16
+              ;;
+          esac
 
       - name: Setup PHP
         uses: shivammathur/setup-php@7c071dfe9dc99bdf297fa79cb49ea005b9fcadbc # v2
@@ -219,6 +206,21 @@ jobs:
 
       - name: Install dependencies
         run: composer update --prefer-dist --no-interaction --no-progress
+
+      - name: Wait for database
+        if: matrix.db != 'sqlite'
+        run: |
+          case "${{ matrix.db }}" in
+            mysql)
+              timeout 60 bash -c 'until docker exec database mysqladmin ping -h127.0.0.1 -uroot -ppassword --silent 2>/dev/null; do sleep 2; done'
+              ;;
+            mariadb)
+              timeout 90 bash -c 'until docker exec database healthcheck.sh --connect --innodb_initialized 2>/dev/null; do sleep 2; done'
+              ;;
+            pgsql)
+              timeout 60 bash -c 'until docker exec database pg_isready -U postgres -q 2>/dev/null; do sleep 2; done'
+              ;;
+          esac
 
       - name: Run comprehensive data-provider tests
         env:
