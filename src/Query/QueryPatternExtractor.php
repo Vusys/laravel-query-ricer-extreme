@@ -6,6 +6,7 @@ namespace Vusys\QueryRicerExtreme\Query;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Vusys\QueryRicerExtreme\Predicate\AndNode;
 use Vusys\QueryRicerExtreme\Predicate\ComparisonNode;
 use Vusys\QueryRicerExtreme\Predicate\PredicateExtractor;
 use Vusys\QueryRicerExtreme\Predicate\PredicateNode;
@@ -302,6 +303,92 @@ final readonly class QueryPatternExtractor
         }
 
         return $result;
+    }
+
+    /**
+     * Extract all user-provided WHERE clauses into a single predicate tree.
+     *
+     * Returns null if any clause uses an unsupported operator, an OR boolean,
+     * or any other form that cannot be expressed as a phase-one predicate node.
+     * Safe global-scope wheres (deleted_at IS NULL) are skipped since they are
+     * already captured by the scope fingerprint.
+     */
+    public function extractFullPredicate(): ?PredicateNode
+    {
+        $query = $this->builder->getQuery();
+
+        /** @var array<int, array<string, mixed>> $wheres */
+        $wheres = $query->wheres;
+
+        $nodes = [];
+
+        foreach ($wheres as $where) {
+            if ($this->isSafeGlobalScopeWhere($where)) {
+                continue;
+            }
+
+            if (($where['boolean'] ?? null) !== 'and') {
+                return null;
+            }
+
+            $node = PredicateExtractor::fromWhere($where);
+
+            if (! $node instanceof PredicateNode) {
+                return null;
+            }
+
+            $nodes[] = $node;
+        }
+
+        if ($nodes === []) {
+            return new AndNode([]);
+        }
+
+        if (count($nodes) === 1) {
+            return $nodes[0];
+        }
+
+        return new AndNode($nodes);
+    }
+
+    /**
+     * Returns true when the query has no structural hazards that prevent
+     * recording or serving coverage (no joins, locks, LIMIT, OFFSET, groups,
+     * havings, or unions).
+     */
+    public function isSafeForCoverage(): bool
+    {
+        $query = $this->builder->getQuery();
+
+        if ($query->joins !== null && $query->joins !== []) {
+            return false;
+        }
+
+        if ($query->lock !== null) {
+            return false;
+        }
+
+        if ($query->limit !== null) {
+            return false;
+        }
+
+        if ($query->offset !== null && $query->offset > 0) {
+            return false;
+        }
+
+        if ($query->groups !== null && $query->groups !== []) {
+            return false;
+        }
+
+        if ($query->havings !== null && $query->havings !== []) {
+            return false;
+        }
+
+        if ($query->unions !== null && $query->unions !== []) {
+            return false;
+        }
+
+        return true;
     }
 
     /** @param array<string, mixed> $where */

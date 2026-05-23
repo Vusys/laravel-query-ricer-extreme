@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Vusys\QueryRicerExtreme\Coverage\CoverageRegistry;
 use Vusys\QueryRicerExtreme\Query\IdentityMapBuilder;
 use Vusys\QueryRicerExtreme\Relations\MemoryBelongsTo;
 use Vusys\QueryRicerExtreme\Relations\MemoryHasMany;
@@ -64,15 +65,18 @@ trait HasIdentityMap
 
         static::saved(function (Model $model): void {
             resolve(IdentityMapStore::class)->afterSaved($model);
+            resolve(CoverageRegistry::class)->flushModelClass($model::class);
         });
 
         static::deleted(function (Model $model): void {
             resolve(IdentityMapStore::class)->afterDeleted($model);
+            resolve(CoverageRegistry::class)->flushModelClass($model::class);
         });
 
         if (in_array(SoftDeletes::class, class_uses_recursive(static::class), true)) {
             static::registerModelEvent('restored', function (Model $model): void {
                 resolve(IdentityMapStore::class)->afterSaved($model);
+                resolve(CoverageRegistry::class)->flushModelClass($model::class);
             });
 
             static::registerModelEvent('forceDeleted', function (Model $model): void {
