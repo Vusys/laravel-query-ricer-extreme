@@ -237,4 +237,45 @@ final class MorphManyMemoryTest extends TestCase
         $this->assertGreaterThan(0, $queryCount, 'morphMany getResults() should issue SQL when store disabled');
         $this->assertCount(1, $result);
     }
+
+    #[Test]
+    public function morph_many_get_falls_back_when_query_has_join(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        Comment::create(['commentable_type' => User::class, 'commentable_id' => $user->id, 'body' => 'hello']);
+
+        $user->load('comments');
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        // A join is a hazard; queryHasHazards() must detect it and fall back to SQL.
+        $user->comments()->join('posts', 'posts.user_id', '=', 'comments.commentable_id')->get();
+
+        $this->assertGreaterThan(0, $queryCount, 'morphMany get() with join must fall back to SQL');
+    }
+
+    #[Test]
+    public function morph_many_get_falls_back_when_parent_entry_flushed_from_store(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        Comment::create(['commentable_type' => User::class, 'commentable_id' => $user->id, 'body' => 'hello']);
+
+        // Load the relation on the model so relationLoaded() returns true inside get(),
+        // then flush the store so findEntry() returns null at the null-safe call site.
+        $user->load('comments');
+        $this->store->flush();
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = $user->comments()->get();
+
+        $this->assertGreaterThan(0, $queryCount, 'morphMany get() must fall back to SQL when the parent entry is absent from the store');
+        $this->assertCount(1, $result);
+    }
 }

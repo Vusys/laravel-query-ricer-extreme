@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Vusys\QueryRicerExtreme\Tests\Unit;
 
+use Illuminate\Database\Eloquent\Model;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Vusys\QueryRicerExtreme\Enums\FactConfidence;
@@ -77,6 +78,44 @@ final class AttributeKnowledgeTest extends TestCase
         $knowledge = new AttributeKnowledge;
 
         $this->assertTrue($knowledge->satisfies([]));
+    }
+
+    #[Test]
+    public function merge_from_saved_creates_fact_for_column_not_previously_tracked(): void
+    {
+        $knowledge = new AttributeKnowledge;
+        // Only 'id' is tracked initially.
+        $knowledge->set('id', $this->makeFact('id', 1));
+
+        $model = new class extends Model
+        {
+            public function getAttributes(): array
+            {
+                return ['id' => 1, 'email' => 'alice@example.com'];
+            }
+        };
+
+        $knowledge->mergeFromSaved($model);
+
+        // 'email' was not in facts before — mergeFromSaved must create it.
+        $fact = $knowledge->get('email');
+        $this->assertNotNull($fact);
+        $this->assertSame('alice@example.com', $fact->currentValue);
+        $this->assertSame('alice@example.com', $fact->originalValue);
+        $this->assertFalse($fact->isDirty);
+        $this->assertSame(FactConfidence::Certain, $fact->confidence);
+        $this->assertSame(FactSource::HydratedFromDatabase, $fact->source);
+    }
+
+    #[Test]
+    public function satisfies_mixed_wildcard_in_list_returns_false_when_not_all_columns_known(): void
+    {
+        // satisfies(['*', 'id']) — the wildcard element short-circuits to allColumnsKnown.
+        $knowledge = new AttributeKnowledge;
+        $knowledge->set('id', $this->makeFact('id', 1));
+        $knowledge->allColumnsKnown = false;
+
+        $this->assertFalse($knowledge->satisfies(['*', 'id']));
     }
 
     private function makeFact(string $column, mixed $value): AttributeFact

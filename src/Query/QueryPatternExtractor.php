@@ -11,9 +11,12 @@ use Vusys\QueryRicerExtreme\Predicate\ComparisonNode;
 use Vusys\QueryRicerExtreme\Predicate\PredicateExtractor;
 use Vusys\QueryRicerExtreme\Predicate\PredicateNode;
 
+/**
+ * @template TModel of Model
+ */
 final readonly class QueryPatternExtractor
 {
-    /** @param Builder<Model> $builder */
+    /** @param Builder<TModel> $builder */
     public function __construct(private Builder $builder) {}
 
     public function extractSinglePrimaryKeyLookup(): int|string|null

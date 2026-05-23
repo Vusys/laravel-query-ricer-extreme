@@ -27,13 +27,6 @@ final class IdentityMapTest extends TestCase
     }
 
     #[Test]
-    public function service_provider_loads(): void
-    {
-        $this->assertNotNull($this->app);
-        $this->assertInstanceOf(IdentityMapStore::class, resolve(IdentityMapStore::class));
-    }
-
-    #[Test]
     public function find_returns_same_instance(): void
     {
         $userA = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
@@ -738,5 +731,39 @@ final class IdentityMapTest extends TestCase
         $this->assertStringContainsString('Plan:', $string);
         $this->assertStringContainsString('Model:', $string);
         $this->assertStringContainsString('SQL executed: no', $string);
+    }
+
+    #[Test]
+    public function with_trashed_find_returns_soft_deleted_model_from_memory_without_sql(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        $user->delete();
+
+        // First withTrashed query hits SQL and warms the map under the with-trashed fingerprint.
+        $firstResult = User::withTrashed()->find($user->id);
+        $this->assertInstanceOf(User::class, $firstResult);
+        $this->assertNotNull($firstResult->deleted_at);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        // Second withTrashed query must be served from memory without SQL.
+        $secondResult = User::withTrashed()->find($user->id);
+
+        $this->assertSame(0, $queryCount, 'withTrashed()->find() should be served from memory after the first SQL call');
+        $this->assertInstanceOf(User::class, $secondResult);
+        $this->assertSame($firstResult, $secondResult);
+    }
+
+    #[Test]
+    public function remember_does_not_store_a_model_that_does_not_exist(): void
+    {
+        $model = new User;
+        // A new model instance that has never been persisted has exists = false.
+        $this->store->remember($model);
+
+        $this->assertSame(0, $this->store->debugStats()['entries']);
     }
 }

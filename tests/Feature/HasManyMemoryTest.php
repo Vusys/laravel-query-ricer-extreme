@@ -260,4 +260,45 @@ final class HasManyMemoryTest extends TestCase
         $this->assertGreaterThan(0, $queryCount, 'hasMany should issue SQL after constrained eager load');
         $this->assertCount(2, $result);
     }
+
+    #[Test]
+    public function has_many_get_falls_back_when_query_has_join(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        Post::create(['user_id' => $user->id, 'title' => 'P1', 'published' => true]);
+
+        $user->load('posts');
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        // A join is a hazard; queryHasHazards() must detect it and fall back to SQL.
+        $user->posts()->join('tags', 'tags.id', '=', 'posts.tag_id')->get();
+
+        $this->assertGreaterThan(0, $queryCount, 'hasMany get() with join must fall back to SQL');
+    }
+
+    #[Test]
+    public function has_many_get_falls_back_when_parent_entry_flushed_from_store(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        Post::create(['user_id' => $user->id, 'title' => 'P1', 'published' => true]);
+
+        // Load the relation on the model so relationLoaded() returns true inside get(),
+        // then flush the store so findEntry() returns null at the null-safe call site.
+        $user->load('posts');
+        $this->store->flush();
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = $user->posts()->get();
+
+        $this->assertGreaterThan(0, $queryCount, 'hasMany get() must fall back to SQL when the parent entry is absent from the store');
+        $this->assertCount(1, $result);
+    }
 }
