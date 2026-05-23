@@ -76,6 +76,15 @@ final class CoverageRegistryFeatureTest extends TestCase
         $this->assertSame(0, $this->registry->entryCount());
     }
 
+    #[Test]
+    public function distinct_prevents_coverage_recording(): void
+    {
+        User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        User::distinct()->get();
+
+        $this->assertSame(0, $this->registry->entryCount());
+    }
+
     // -------------------------------------------------------------------------
     // get() served from coverage (ReturnCollectionFromCoverage)
     // -------------------------------------------------------------------------
@@ -265,6 +274,20 @@ final class CoverageRegistryFeatureTest extends TestCase
         $this->assertSame(1, $sql, 'first() with 2+ matches and no ORDER BY must fall through to SQL');
     }
 
+    #[Test]
+    public function first_returns_null_from_empty_coverage_without_sql(): void
+    {
+        // No users — coverage records empty region.
+        User::where('active', true)->get();
+
+        $sql = $this->countSql(function (): void {
+            $result = User::where('active', true)->first();
+            $this->assertNull($result);
+        });
+
+        $this->assertSame(0, $sql, 'first() on empty coverage must not fall through to SQL');
+    }
+
     // -------------------------------------------------------------------------
     // Empty coverage recording
     // -------------------------------------------------------------------------
@@ -305,7 +328,22 @@ final class CoverageRegistryFeatureTest extends TestCase
     #[Test]
     public function non_subset_query_falls_through_to_sql(): void
     {
-        // 'Charlie' is not in the identity map, so the evaluator returns Unknown → SQL.
+        // Only active=true users are covered; a query for active=false is outside
+        // that region, so no covering entry exists and SQL must run.
+        User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => true]);
+        User::where('active', true)->get();
+
+        $sql = $this->countSql(function (): void {
+            User::where('active', false)->get();
+        });
+
+        $this->assertSame(1, $sql, 'Query outside recorded region should fall through to SQL');
+    }
+
+    #[Test]
+    public function first_on_non_existent_user_served_from_coverage_without_sql(): void
+    {
+        // All users loaded → coverage knows no user named Charlie exists.
         $this->seedUsers();
 
         $sql = $this->countSql(function (): void {
@@ -313,7 +351,7 @@ final class CoverageRegistryFeatureTest extends TestCase
             $this->assertNull($result);
         });
 
-        $this->assertSame(1, $sql, 'Query with unknown model should fall through to SQL');
+        $this->assertSame(0, $sql, 'first() for absent model should be served from coverage without SQL');
     }
 
     // -------------------------------------------------------------------------

@@ -368,6 +368,10 @@ final readonly class QueryPatternExtractor
             return false;
         }
 
+        if ($query->distinct) {
+            return false;
+        }
+
         if ($query->limit !== null) {
             return false;
         }

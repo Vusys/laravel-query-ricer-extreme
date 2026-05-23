@@ -700,6 +700,17 @@ class IdentityMapBuilder extends Builder
         $coveredModels = $this->getModelsFromCoverage($resolvedColumns, $store, $connection, $fingerprint, $extractor);
 
         if ($coveredModels !== null) {
+            if ($coveredModels === []) {
+                $store->capture(new Explanation(
+                    type: PlanType::ReturnFirstFromCoverage,
+                    modelClass: $model::class,
+                    reason: 'coverage-subset-hit',
+                    sqlExecuted: false,
+                ));
+
+                return null;
+            }
+
             $sorted = $this->sortForFirst($coveredModels);
 
             if ($sorted !== null) {
