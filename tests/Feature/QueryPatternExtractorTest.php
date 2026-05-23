@@ -216,6 +216,14 @@ final class QueryPatternExtractorTest extends TestCase
     }
 
     #[Test]
+    public function extract_bounded_key_set_returns_null_when_group_by_present(): void
+    {
+        $extractor = new QueryPatternExtractor(User::query()->whereKey([1, 2, 3])->groupBy('id'));
+
+        $this->assertNull($extractor->extractBoundedKeySet());
+    }
+
+    #[Test]
     public function extract_bounded_key_set_is_not_blocked_by_zero_offset(): void
     {
         $extractor = new QueryPatternExtractor(User::query()->whereKey([1, 2, 3])->offset(0));

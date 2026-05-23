@@ -185,6 +185,36 @@ final class ConfigPermutationTest extends TestCase
     }
 
     #[DataProvider('uniqueAbsenceMethodProvider')]
+    public function test_absence_with_extra_predicate_does_not_poison_plain_lookup(string $method): void
+    {
+        config([
+            'query-ricer-extreme.models' => [User::class => ['unique' => [['email']]]],
+        ]);
+
+        // Prime with an extra predicate — absence must NOT be recorded because
+        // $extraNodes !== [], so the cache cannot prove the plain lookup is also absent.
+        if ($method === 'first') {
+            User::where('email', 'nobody@example.com')->where('active', true)->first();
+        } else {
+            User::where('email', 'nobody@example.com')->where('active', true)->exists();
+        }
+
+        $queries = 0;
+        DB::listen(function () use (&$queries): void {
+            $queries++;
+        });
+
+        // A subsequent plain lookup must still hit SQL.
+        if ($method === 'first') {
+            User::where('email', 'nobody@example.com')->first();
+        } else {
+            User::where('email', 'nobody@example.com')->exists();
+        }
+
+        $this->assertSame(1, $queries, "{$method}() with extra-predicate priming must not skip SQL for plain lookup");
+    }
+
+    #[DataProvider('uniqueAbsenceMethodProvider')]
     public function test_unique_absence_prevents_repeated_sql(string $method): void
     {
         config([
