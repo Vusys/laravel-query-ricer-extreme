@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Vusys\QueryRicerExtreme\Tests\Fuzz;
 
-use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\Group;
 use Vusys\QueryRicerExtreme\Store\IdentityMapStore;
 use Vusys\QueryRicerExtreme\Tests\Models\User;
@@ -24,7 +23,7 @@ final class QueryCorrectnessTest extends FuzzerTestCase
             $store = resolve(IdentityMapStore::class);
 
             if ($step === 0) {
-                $population = $this->buildPopulation();
+                $population = $this->buildPopulation($seed, $step);
             }
 
             $store->flush();
@@ -58,7 +57,7 @@ final class QueryCorrectnessTest extends FuzzerTestCase
             $store = resolve(IdentityMapStore::class);
 
             if ($step === 0) {
-                $population = $this->buildPopulation();
+                $population = $this->buildPopulation($seed, $step);
             }
 
             $store->flush();
@@ -99,7 +98,7 @@ final class QueryCorrectnessTest extends FuzzerTestCase
             $store = resolve(IdentityMapStore::class);
 
             if ($step === 0) {
-                $population = $this->buildPopulation();
+                $population = $this->buildPopulation($seed, $step);
             }
 
             if ($population === []) {
@@ -140,7 +139,7 @@ final class QueryCorrectnessTest extends FuzzerTestCase
     }
 
     /** @return list<User> */
-    private function buildPopulation(): array
+    private function buildPopulation(int $seed, int $step): array
     {
         $count = mt_rand(1, 5);
         $users = [];
@@ -148,7 +147,7 @@ final class QueryCorrectnessTest extends FuzzerTestCase
         for ($i = 0; $i < $count; $i++) {
             $user = User::create([
                 'name' => 'FuzzUser'.$i,
-                'email' => Str::random(10).'@fuzz.test',
+                'email' => sprintf('fuzz-%d-%d-%d@fuzz.test', $seed, $step, $i),
                 'active' => (bool) mt_rand(0, 1),
             ]);
 

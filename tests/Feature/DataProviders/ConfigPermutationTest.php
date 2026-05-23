@@ -86,7 +86,8 @@ final class ConfigPermutationTest extends TestCase
             $this->assertSame(0, $queries, 'Single-column unique hit should skip SQL');
             $this->assertNotNull($found);
         } else {
-            $this->assertGreaterThanOrEqual(0, $queries);
+            $this->assertSame(1, $queries, 'Non-single unique-key config should execute SQL');
+            $this->assertNotNull($found);
         }
     }
 

@@ -351,14 +351,15 @@ final class IdentityMapStore
         $this->capturing = true;
         $this->captured = [];
 
+        $result = [];
+
         try {
             $callback();
+            $result = $this->captured;
         } finally {
             $this->capturing = $previous;
+            $this->captured = $previousCaptured;
         }
-
-        $result = $this->captured;
-        $this->captured = $previousCaptured;
 
         return $result;
     }

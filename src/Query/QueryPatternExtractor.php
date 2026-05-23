@@ -307,9 +307,21 @@ final readonly class QueryPatternExtractor
     /** @param array<string, mixed> $where */
     private function isSafeGlobalScopeWhere(array $where): bool
     {
+        $model = $this->builder->getModel();
         $type = $where['type'] ?? null;
         $column = $where['column'] ?? null;
+        $boolean = $where['boolean'] ?? null;
 
-        return $type === 'Null' && is_string($column) && str_ends_with($column, 'deleted_at');
+        $deletedAt = method_exists($model, 'getDeletedAtColumn')
+            ? $model->getDeletedAtColumn()
+            : 'deleted_at';
+        $qualifiedDeletedAt = method_exists($model, 'getQualifiedDeletedAtColumn')
+            ? $model->getQualifiedDeletedAtColumn()
+            : $model->getTable().'.'.$deletedAt;
+
+        return $type === 'Null'
+            && $boolean === 'and'
+            && is_string($column)
+            && in_array($column, [$deletedAt, $qualifiedDeletedAt], true);
     }
 }
