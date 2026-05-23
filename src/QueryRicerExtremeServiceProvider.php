@@ -10,6 +10,7 @@ use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
+use Vusys\QueryRicerExtreme\Coverage\CoverageRegistry;
 use Vusys\QueryRicerExtreme\Store\IdentityMapStore;
 
 class QueryRicerExtremeServiceProvider extends ServiceProvider
@@ -20,6 +21,7 @@ class QueryRicerExtremeServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__.'/../config/query-ricer-extreme.php', 'query-ricer-extreme');
 
         $this->app->singleton(IdentityMapStore::class);
+        $this->app->singleton(CoverageRegistry::class);
     }
 
     public function boot(): void
@@ -38,19 +40,23 @@ class QueryRicerExtremeServiceProvider extends ServiceProvider
         if ($this->app->bound(HttpKernel::class)) {
             $this->app->terminating(function (): void {
                 $this->app->make(IdentityMapStore::class)->flush();
+                $this->app->make(CoverageRegistry::class)->flush();
             });
         }
 
         Event::listen(JobProcessing::class, function (): void {
             $this->app->make(IdentityMapStore::class)->flush();
+            $this->app->make(CoverageRegistry::class)->flush();
         });
 
         Event::listen(JobProcessed::class, function (): void {
             $this->app->make(IdentityMapStore::class)->flush();
+            $this->app->make(CoverageRegistry::class)->flush();
         });
 
         Event::listen(JobFailed::class, function (): void {
             $this->app->make(IdentityMapStore::class)->flush();
+            $this->app->make(CoverageRegistry::class)->flush();
         });
     }
 }
