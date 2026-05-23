@@ -336,39 +336,37 @@ final class ProcessTruthTest extends TestCase
     #[Test]
     public function unique_key_lookup_bypasses_stale_absence_in_process_truth(): void
     {
-        config([
-            'query-ricer-extreme.models' => [
-                User::class => ['unique' => [['email']]],
-            ],
-        ]);
-
-        $alice = $this->createFresh('Alice', 'alice@example.com');
-
-        User::find($alice->id);
-
-        // Prime the absence cache for an email no one has yet.
-        User::where('email', 'new@example.com')->get();
-
-        // Dirty alice's email to the previously-absent value (drift-in).
-        $aliceLive = User::find($alice->id);
-        $this->assertInstanceOf(User::class, $aliceLive);
-        $aliceLive->email = 'new@example.com';
+        $this->setupStaleAbsenceScenario();
 
         $queryCount = 0;
         DB::listen(function () use (&$queryCount): void {
             $queryCount++;
         });
 
-        // process-truth must not serve from stale absence; SQL must execute.
         $result = User::where('email', 'new@example.com')->get();
 
         $this->assertSame(1, $queryCount, 'stale absence cache must be bypassed in process-truth');
-        // DB still holds alice@example.com, so the SQL returns nothing.
         $this->assertCount(0, $result);
     }
 
     #[Test]
     public function exists_bypasses_stale_absence_in_process_truth(): void
+    {
+        $this->setupStaleAbsenceScenario();
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $exists = User::where('email', 'new@example.com')->exists();
+
+        $this->assertSame(1, $queryCount, 'stale absence cache must be bypassed in process-truth for exists()');
+        $this->assertFalse($exists);
+    }
+
+    /** Configures unique-key index, creates Alice, primes the absence cache for 'new@example.com', then dirties Alice's email to that value (drift-in). */
+    private function setupStaleAbsenceScenario(): void
     {
         config([
             'query-ricer-extreme.models' => [
@@ -380,25 +378,11 @@ final class ProcessTruthTest extends TestCase
 
         User::find($alice->id);
 
-        // Prime the absence cache for an email no one has yet.
         User::where('email', 'new@example.com')->get();
 
-        // Dirty alice's email to the previously-absent value (drift-in).
         $aliceLive = User::find($alice->id);
         $this->assertInstanceOf(User::class, $aliceLive);
         $aliceLive->email = 'new@example.com';
-
-        $queryCount = 0;
-        DB::listen(function () use (&$queryCount): void {
-            $queryCount++;
-        });
-
-        // process-truth must not serve from stale absence; SQL must execute.
-        $exists = User::where('email', 'new@example.com')->exists();
-
-        $this->assertSame(1, $queryCount, 'stale absence cache must be bypassed in process-truth for exists()');
-        // DB still holds alice@example.com, so exists() returns false.
-        $this->assertFalse($exists);
     }
 
     // -----------------------------------------------------------------------
