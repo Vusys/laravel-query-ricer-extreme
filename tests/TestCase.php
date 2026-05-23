@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Vusys\QueryRicerExtreme\Tests;
 
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Orchestra\Testbench\TestCase as OrchestraTestCase;
 use Vusys\QueryRicerExtreme\QueryRicerExtremeServiceProvider;
@@ -46,6 +47,7 @@ abstract class TestCase extends OrchestraTestCase
     {
         Schema::dropIfExists('posts');
         Schema::dropIfExists('users');
+        DB::disconnect();
         parent::tearDown();
     }
 }

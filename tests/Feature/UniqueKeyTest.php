@@ -919,7 +919,7 @@ final class UniqueKeyTest extends TestCase
             $queryCount++;
         });
 
-        $result = $this->store->disabled(fn() => User::where('email', 'alice@example.com')->exists());
+        $result = $this->store->disabled(fn () => User::where('email', 'alice@example.com')->exists());
 
         $this->assertSame(1, $queryCount, 'disabled scope must bypass exists() shortcut');
         $this->assertTrue($result);
