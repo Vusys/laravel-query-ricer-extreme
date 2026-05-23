@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Facades\DB;
 use PHPUnit\Framework\Attributes\Test;
 use Vusys\QueryRicerExtreme\Enums\PlanType;
+use Vusys\QueryRicerExtreme\IdentityMap;
 use Vusys\QueryRicerExtreme\IdentityMapStore;
 use Vusys\QueryRicerExtreme\Tests\Models\User;
 use Vusys\QueryRicerExtreme\Tests\TestCase;
@@ -885,5 +886,237 @@ final class UniqueKeyTest extends TestCase
         $email = User::where('email', 'alice@example.com')->value('email');
         $this->assertSame(0, $queryCount, 'value() must be served from unique-key cache');
         $this->assertSame('alice@example.com', $email);
+    }
+
+    // -----------------------------------------------------------------------
+    // exists() — early-exit guards (identityMapDisabled, store disabled)
+    // -----------------------------------------------------------------------
+
+    #[Test]
+    public function exists_bypassed_when_identity_map_disabled(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        User::find($alice->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = User::withoutIdentityMap()->where('email', 'alice@example.com')->exists();
+        $this->assertSame(1, $queryCount, 'withoutIdentityMap must bypass exists() shortcut');
+        $this->assertTrue($result);
+    }
+
+    #[Test]
+    public function exists_bypassed_when_store_disabled(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        User::find($alice->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = $this->store->disabled(fn() => User::where('email', 'alice@example.com')->exists());
+
+        $this->assertSame(1, $queryCount, 'disabled scope must bypass exists() shortcut');
+        $this->assertTrue($result);
+    }
+
+    // -----------------------------------------------------------------------
+    // exists() — falls through when extractUniqueKeyLookup returns null
+    // -----------------------------------------------------------------------
+
+    #[Test]
+    public function exists_falls_through_for_empty_where_list(): void
+    {
+        // No explicit where conditions → $query->wheres is empty → extractUniqueKeyLookup
+        // returns null at the wheres === [] guard, exists() falls through to SQL.
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        User::find($alice->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = User::exists();
+        $this->assertSame(1, $queryCount, 'exists() with no wheres must fall through to SQL');
+        $this->assertTrue($result);
+    }
+
+    #[Test]
+    public function exists_falls_through_for_or_where_with_unique_config(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        User::find($alice->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        // orWhere produces boolean = 'or' — in exists() scopes haven't been applied yet,
+        // so the raw wheres are visible and extractUniqueKeyLookup returns null at the
+        // boolean !== 'and' guard, falling through to SQL.
+        $result = User::where('email', 'alice@example.com')->orWhere('name', 'Alice')->exists();
+        $this->assertSame(1, $queryCount, 'orWhere must bypass unique-key shortcut in exists()');
+        $this->assertTrue($result);
+    }
+
+    #[Test]
+    public function first_falls_through_for_duplicate_equality_constraint(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        User::find($alice->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        // Two equality predicates on the same column → duplicate in equalityMap → null
+        $result = User::where('email', 'alice@example.com')->where('email', 'alice@example.com')->first();
+        $this->assertSame(1, $queryCount, 'Duplicate column constraint must bypass unique-key shortcut');
+        $this->assertNotNull($result);
+    }
+
+    #[Test]
+    public function first_falls_through_for_unsupported_operator_after_unique_key(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        User::find($alice->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        // LIKE is unsupported by PredicateExtractor → returns null → extractUniqueKeyLookup null
+        $result = User::where('email', 'alice@example.com')->where('name', 'LIKE', '%Alice%')->first();
+        $this->assertSame(1, $queryCount, 'Unsupported operator must bypass unique-key shortcut');
+        $this->assertNotNull($result);
+    }
+
+    #[Test]
+    public function first_falls_through_when_no_equality_predicates_match_unique_key(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        User::find($alice->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        // Only a Null where — no equality predicates → equalityMap empty → extractUniqueKeyLookup null
+        $result = User::whereNull('name')->first();
+        $this->assertSame(1, $queryCount, 'No equality predicates must bypass unique-key shortcut');
+        $this->assertNull($result);
+    }
+
+    // -----------------------------------------------------------------------
+    // exists() — Unknown predicate falls through to SQL
+    // -----------------------------------------------------------------------
+
+    #[Test]
+    public function exists_with_unknown_predicate_falls_through_to_sql(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com', active: true);
+
+        // Load with limited columns so 'active' is NOT in the cached entry's attributes
+        User::select('id', 'email')->find($alice->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        // Email is a unique-key hit, but 'active' is an extra predicate on an
+        // attribute not loaded → evaluates to Unknown → falls through to SQL
+        $result = User::where('email', 'alice@example.com')->where('active', true)->exists();
+        $this->assertSame(1, $queryCount, 'Unknown predicate must fall through to SQL');
+        $this->assertTrue($result);
+    }
+
+    // -----------------------------------------------------------------------
+    // IdentityMapStore — per-class flush clears unique index and absent maps
+    // -----------------------------------------------------------------------
+
+    #[Test]
+    public function per_class_flush_clears_unique_index_and_absent_entries(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        User::find($alice->id); // populates uniqueIndex
+
+        // Record a unique-key absence to populate uniqueAbsent
+        User::where('email', 'nobody@example.com')->first();
+
+        $statsBefore = $this->store->debugStats();
+        $this->assertGreaterThan(0, $statsBefore['unique_index'], 'uniqueIndex must be populated before flush');
+        $this->assertGreaterThan(0, $statsBefore['unique_absent'], 'uniqueAbsent must be populated before flush');
+
+        IdentityMap::flush(User::class);
+
+        $statsAfter = $this->store->debugStats();
+        $this->assertSame(0, $statsAfter['unique_index'], 'Per-class flush must clear uniqueIndex');
+        $this->assertSame(0, $statsAfter['unique_absent'], 'Per-class flush must clear uniqueAbsent');
+    }
+
+    // -----------------------------------------------------------------------
+    // IdentityMapStore — stale uniqueIndex entry evicted when model is forgotten
+    // -----------------------------------------------------------------------
+
+    #[Test]
+    public function forgotten_model_evicts_stale_unique_index_on_next_lookup(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        User::find($alice->id); // uniqueIndex now maps email fingerprint → mapKey
+
+        // forget() removes the entry from entries but leaves uniqueIndex stale
+        IdentityMap::forget($alice);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        // findByUniqueKey finds the mapKey in uniqueIndex but entries[$mapKey] is null
+        // → evicts the stale uniqueIndex entry → falls through to SQL
+        $result = User::where('email', 'alice@example.com')->first();
+        $this->assertSame(1, $queryCount, 'Stale uniqueIndex after forget must fall through to SQL');
+        $this->assertNotNull($result);
+    }
+
+    // -----------------------------------------------------------------------
+    // IdentityMapStore — malformed config entry is skipped gracefully
+    // -----------------------------------------------------------------------
+
+    #[Test]
+    public function malformed_unique_config_entry_is_skipped_gracefully(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+
+        // Provide a flat string instead of array-of-arrays — the non-array entry
+        // must be skipped without error, yielding no unique indexes
+        config(['query-ricer-extreme.models' => [
+            User::class => [
+                'unique' => ['email'],
+            ],
+        ]]);
+
+        User::find($alice->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        // No valid unique indexes → falls through to SQL
+        $result = User::where('email', 'alice@example.com')->first();
+        $this->assertSame(1, $queryCount, 'Malformed config must produce no unique indexes');
+        $this->assertNotNull($result);
     }
 }
