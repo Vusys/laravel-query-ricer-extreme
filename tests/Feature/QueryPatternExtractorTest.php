@@ -272,6 +272,26 @@ final class QueryPatternExtractorTest extends TestCase
     }
 
     #[Test]
+    public function extract_unique_key_lookup_returns_null_when_query_has_group_by(): void
+    {
+        $extractor = new QueryPatternExtractor(
+            Post::query()->where('title', 'Hello')->groupBy('id')
+        );
+
+        $this->assertNull($extractor->extractUniqueKeyLookup([['title']]));
+    }
+
+    #[Test]
+    public function extract_unique_key_lookup_returns_null_when_query_has_having(): void
+    {
+        $extractor = new QueryPatternExtractor(
+            Post::query()->where('title', 'Hello')->groupBy('id')->havingRaw('count(*) > 1')
+        );
+
+        $this->assertNull($extractor->extractUniqueKeyLookup([['title']]));
+    }
+
+    #[Test]
     public function extract_unique_key_lookup_returns_values_when_unique_column_present(): void
     {
         $extractor = new QueryPatternExtractor(Post::query()->where('title', 'Hello'));
