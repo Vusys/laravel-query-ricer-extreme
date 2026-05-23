@@ -43,9 +43,12 @@ final class MassWriteModelingTest extends TestCase
     {
         DB::enableQueryLog();
         DB::flushQueryLog();
-        $callback();
-        $count = count(DB::getQueryLog());
-        DB::disableQueryLog();
+        try {
+            $callback();
+            $count = count(DB::getQueryLog());
+        } finally {
+            DB::disableQueryLog();
+        }
 
         return $count;
     }
