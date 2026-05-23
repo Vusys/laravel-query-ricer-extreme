@@ -19,9 +19,24 @@ final readonly class QueryPatternExtractor
     /** @param Builder<TModel> $builder */
     public function __construct(private Builder $builder) {}
 
+    private function hasStructuralHazards(): bool
+    {
+        $query = $this->builder->getQuery();
+
+        return ($query->joins !== null && $query->joins !== [])
+            || ($query->unions !== null && $query->unions !== [])
+            || $query->lock !== null
+            || ($query->groups !== null && $query->groups !== [])
+            || ($query->havings !== null && $query->havings !== []);
+    }
+
     public function extractSinglePrimaryKeyLookup(): int|string|null
     {
         $query = $this->builder->getQuery();
+
+        if ($this->hasStructuralHazards()) {
+            return null;
+        }
 
         /** @var array<int, array<string, mixed>> $wheres */
         $wheres = $query->wheres;
@@ -83,6 +98,14 @@ final readonly class QueryPatternExtractor
     public function extractBoundedKeySet(): ?array
     {
         $query = $this->builder->getQuery();
+
+        if ($this->hasStructuralHazards()) {
+            return null;
+        }
+
+        if ($query->limit !== null || ($query->offset !== null && $query->offset > 0)) {
+            return null;
+        }
 
         /** @var array<int, array<string, mixed>> $wheres */
         $wheres = $query->wheres;
@@ -175,15 +198,11 @@ final readonly class QueryPatternExtractor
 
         $query = $this->builder->getQuery();
 
-        if (
-            ($query->joins !== null && $query->joins !== [])
-            || ($query->unions !== null && $query->unions !== [])
-            || ($query->groups !== null && $query->groups !== [])
-            || ($query->havings !== null && $query->havings !== [])
-            || $query->lock !== null
-            || ($query->offset !== null && $query->offset > 0)
-            || ($query->limit !== null && $query->limit < 1)
-        ) {
+        if ($this->hasStructuralHazards()) {
+            return null;
+        }
+
+        if (($query->offset !== null && $query->offset > 0) || ($query->limit !== null && $query->limit < 1)) {
             return null;
         }
 

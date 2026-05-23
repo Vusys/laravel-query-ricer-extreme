@@ -1091,48 +1091,6 @@ final class UniqueKeyTest extends TestCase
     }
 
     // -----------------------------------------------------------------------
-    // absence_tracking.unique_key toggle — respected by both first() and exists()
-    // -----------------------------------------------------------------------
-
-    #[Test]
-    public function first_does_not_record_unique_absence_when_toggle_disabled(): void
-    {
-        config(['query-ricer-extreme.absence_tracking.unique_key' => false]);
-
-        // First call hits SQL and returns null — absence must NOT be recorded
-        User::where('email', 'nobody@example.com')->first();
-
-        $queryCount = 0;
-        DB::listen(function () use (&$queryCount): void {
-            $queryCount++;
-        });
-
-        // Second call must hit SQL again because absence tracking is disabled
-        $result = User::where('email', 'nobody@example.com')->first();
-        $this->assertSame(1, $queryCount, 'first() must not skip SQL when unique_key absence tracking is disabled');
-        $this->assertNull($result);
-    }
-
-    #[Test]
-    public function exists_does_not_record_unique_absence_when_toggle_disabled(): void
-    {
-        config(['query-ricer-extreme.absence_tracking.unique_key' => false]);
-
-        // First call hits SQL and returns false — absence must NOT be recorded
-        User::where('email', 'nobody@example.com')->exists();
-
-        $queryCount = 0;
-        DB::listen(function () use (&$queryCount): void {
-            $queryCount++;
-        });
-
-        // Second call must hit SQL again because absence tracking is disabled
-        $result = User::where('email', 'nobody@example.com')->exists();
-        $this->assertSame(1, $queryCount, 'exists() must not skip SQL when unique_key absence tracking is disabled');
-        $this->assertFalse($result);
-    }
-
-    // -----------------------------------------------------------------------
     // IdentityMapStore — malformed config entry is skipped gracefully
     // -----------------------------------------------------------------------
 

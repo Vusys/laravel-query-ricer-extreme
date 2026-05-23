@@ -766,4 +766,74 @@ final class IdentityMapTest extends TestCase
 
         $this->assertSame(0, $this->store->debugStats()['entries']);
     }
+
+    // -----------------------------------------------------------------------
+    // Structural hazards always bypass the identity map
+    // -----------------------------------------------------------------------
+
+    #[Test]
+    public function find_with_lock_always_hits_sql(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        User::find($user->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        User::where('id', $user->id)->lockForUpdate()->first();
+
+        $this->assertSame(1, $queryCount, 'A locking query must always hit SQL to acquire the lock');
+    }
+
+    #[Test]
+    public function wherekey_with_join_always_hits_sql(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        User::find($user->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        User::join('users as u2', 'u2.id', '=', 'users.id')->whereKey([$user->id])->get();
+
+        $this->assertSame(1, $queryCount, 'A keyset query with a join must hit SQL');
+    }
+
+    #[Test]
+    public function single_pk_lookup_with_join_always_hits_sql(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        User::find($user->id);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        User::join('users as u2', 'u2.id', '=', 'users.id')->where('users.id', $user->id)->first();
+
+        $this->assertSame(1, $queryCount, 'A single-PK lookup with a join must hit SQL');
+    }
+
+    #[Test]
+    public function keyset_with_limit_always_hits_sql(): void
+    {
+        $user1 = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        $user2 = User::create(['name' => 'Bob', 'email' => 'bob@example.com']);
+        User::whereKey([$user1->id, $user2->id])->get();
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $results = User::whereKey([$user1->id, $user2->id])->limit(1)->get();
+
+        $this->assertSame(1, $queryCount, 'A keyset query with LIMIT must hit SQL');
+        $this->assertCount(1, $results);
+    }
 }

@@ -424,7 +424,7 @@ class IdentityMapBuilder extends Builder
                 }
             }
 
-            if ($models === [] && $extraNodes === [] && (bool) config('query-ricer-extreme.absence_tracking.unique_key', true)) {
+            if ($models === [] && $extraNodes === []) {
                 $store->recordAbsentByUniqueKey(
                     connection: $connection,
                     modelClass: $model::class,
@@ -574,7 +574,7 @@ class IdentityMapBuilder extends Builder
 
         $result = parent::exists();
 
-        if (! $result && $extraNodes === [] && (bool) config('query-ricer-extreme.absence_tracking.unique_key', true)) {
+        if (! $result && $extraNodes === []) {
             $store->recordAbsentByUniqueKey(
                 connection: $connection,
                 modelClass: $model::class,

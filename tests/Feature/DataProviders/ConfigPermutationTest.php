@@ -28,23 +28,11 @@ final class ConfigPermutationTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
-    // PK absence always works regardless of uk_tracking toggle
+    // PK absence is always tracked
     // -------------------------------------------------------------------------
 
-    /** @return array<string, array{bool}> */
-    public static function ukTrackingProvider(): array
+    public function test_primary_key_absence_prevents_repeated_sql(): void
     {
-        return [
-            'uk_tracking=on' => [true],
-            'uk_tracking=off' => [false],
-        ];
-    }
-
-    #[DataProvider('ukTrackingProvider')]
-    public function test_primary_key_absence_always_prevents_second_sql(bool $ukTracking): void
-    {
-        config(['query-ricer-extreme.absence_tracking.unique_key' => $ukTracking]);
-
         $queries = 0;
         DB::listen(function () use (&$queries): void {
             $queries++;
@@ -53,7 +41,7 @@ final class ConfigPermutationTest extends TestCase
         User::find(9999);
         User::find(9999);
 
-        $this->assertSame(1, $queries, 'PK absence is always tracked regardless of uk_tracking');
+        $this->assertSame(1, $queries, 'PK absence is always tracked');
     }
 
     // -------------------------------------------------------------------------
@@ -184,7 +172,7 @@ final class ConfigPermutationTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
-    // UK absence tracking toggle — first() and exists()
+    // UK absence is always tracked
     // -------------------------------------------------------------------------
 
     /** @return array<string, array{string}> */
@@ -197,17 +185,18 @@ final class ConfigPermutationTest extends TestCase
     }
 
     #[DataProvider('uniqueAbsenceMethodProvider')]
-    public function test_unique_absence_not_recorded_when_toggle_disabled(string $method): void
+    public function test_absence_with_extra_predicate_does_not_poison_plain_lookup(string $method): void
     {
         config([
             'query-ricer-extreme.models' => [User::class => ['unique' => [['email']]]],
-            'query-ricer-extreme.absence_tracking.unique_key' => false,
         ]);
 
+        // Prime with an extra predicate — absence must NOT be recorded because
+        // $extraNodes !== [], so the cache cannot prove the plain lookup is also absent.
         if ($method === 'first') {
-            User::where('email', 'nobody@example.com')->first();
+            User::where('email', 'nobody@example.com')->where('active', true)->first();
         } else {
-            User::where('email', 'nobody@example.com')->exists();
+            User::where('email', 'nobody@example.com')->where('active', true)->exists();
         }
 
         $queries = 0;
@@ -215,21 +204,21 @@ final class ConfigPermutationTest extends TestCase
             $queries++;
         });
 
+        // A subsequent plain lookup must still hit SQL.
         if ($method === 'first') {
             User::where('email', 'nobody@example.com')->first();
         } else {
             User::where('email', 'nobody@example.com')->exists();
         }
 
-        $this->assertSame(1, $queries, "{$method}() must hit SQL again when uk absence tracking is disabled");
+        $this->assertSame(1, $queries, "{$method}() with extra-predicate priming must not skip SQL for plain lookup");
     }
 
     #[DataProvider('uniqueAbsenceMethodProvider')]
-    public function test_unique_absence_recorded_when_toggle_enabled(string $method): void
+    public function test_unique_absence_prevents_repeated_sql(string $method): void
     {
         config([
             'query-ricer-extreme.models' => [User::class => ['unique' => [['email']]]],
-            'query-ricer-extreme.absence_tracking.unique_key' => true,
         ]);
 
         if ($method === 'first') {
@@ -249,33 +238,25 @@ final class ConfigPermutationTest extends TestCase
             User::where('email', 'nobody@example.com')->exists();
         }
 
-        $this->assertSame(0, $queries, "{$method}() must skip SQL when uk absence tracking is enabled");
+        $this->assertSame(0, $queries, "{$method}() must skip SQL on repeated absent unique-key lookup");
     }
 
     // -------------------------------------------------------------------------
-    // Full permutation: pk_tracking × uk_tracking × unique_config — identity
-    // map is always correct for present models
+    // Identity map is always correct for present models across unique-key config shapes
     // -------------------------------------------------------------------------
 
-    /** @return array<string, array{bool, bool, string}> */
-    public static function fullPermutationProvider(): array
+    /** @return array<string, array{string}> */
+    public static function uniqueConfigShapeProvider(): array
     {
-        $result = [];
-
-        foreach ([true, false] as $pk) {
-            foreach ([true, false] as $uk) {
-                foreach (['none', 'single', 'compound'] as $shape) {
-                    $label = "pk={$pk} uk={$uk} shape={$shape}";
-                    $result[$label] = [$pk, $uk, $shape];
-                }
-            }
-        }
-
-        return $result;
+        return [
+            'no unique config' => ['none'],
+            'single-column uk' => ['single'],
+            'compound uk' => ['compound'],
+        ];
     }
 
-    #[DataProvider('fullPermutationProvider')]
-    public function test_identity_map_consistent_for_present_model_across_all_configs(bool $pkTracking, bool $ukTracking, string $shape): void
+    #[DataProvider('uniqueConfigShapeProvider')]
+    public function test_identity_map_consistent_for_present_model_across_unique_config_shapes(string $shape): void
     {
         $uniqueConfig = match ($shape) {
             'single' => [User::class => ['unique' => [['email']]]],
@@ -283,11 +264,7 @@ final class ConfigPermutationTest extends TestCase
             default => [],
         };
 
-        config([
-            'query-ricer-extreme.absence_tracking.primary_key' => $pkTracking,
-            'query-ricer-extreme.absence_tracking.unique_key' => $ukTracking,
-            'query-ricer-extreme.models' => $uniqueConfig,
-        ]);
+        config(['query-ricer-extreme.models' => $uniqueConfig]);
 
         $user = User::create(['name' => 'Alice', 'email' => 'alice-'.uniqid().'@example.com']);
 
