@@ -21,6 +21,7 @@ abstract class TestCase extends OrchestraTestCase
     #[\Override]
     protected function defineDatabaseMigrations(): void
     {
+        Schema::dropIfExists('comments');
         Schema::dropIfExists('posts');
         Schema::dropIfExists('uuid_users');
         Schema::dropIfExists('users');
@@ -50,11 +51,19 @@ abstract class TestCase extends OrchestraTestCase
             $table->boolean('published')->default(false);
             $table->timestamps();
         });
+
+        Schema::create('comments', function (Blueprint $table): void {
+            $table->id();
+            $table->morphs('commentable');
+            $table->string('body');
+            $table->timestamps();
+        });
     }
 
     #[\Override]
     protected function tearDown(): void
     {
+        Schema::dropIfExists('comments');
         Schema::dropIfExists('posts');
         Schema::dropIfExists('uuid_users');
         Schema::dropIfExists('users');

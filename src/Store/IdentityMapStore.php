@@ -186,6 +186,20 @@ final class IdentityMapStore
         }
     }
 
+    public function findEntry(Model $model): ?IdentityEntry
+    {
+        $key = $model->getKey();
+
+        if (! is_int($key) && ! is_string($key)) {
+            return null;
+        }
+
+        $fingerprint = ScopeFingerprinter::fromModel($model);
+        $mapKey = $this->makeKey($model, $key, $fingerprint);
+
+        return $this->entries[$mapKey] ?? null;
+    }
+
     public function find(
         string $connection,
         string $modelClass,
@@ -331,6 +345,12 @@ final class IdentityMapStore
         return $this->disabled;
     }
 
+    /**
+     * @template T
+     *
+     * @param  Closure(): T  $callback
+     * @return T
+     */
     public function disabled(Closure $callback): mixed
     {
         $previous = $this->disabled;

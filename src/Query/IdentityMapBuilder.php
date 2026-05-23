@@ -84,6 +84,10 @@ class IdentityMapBuilder extends Builder
             /** @var TModel $cached */
             $cached = $entry->model;
 
+            if ($this->eagerLoad !== []) {
+                $this->eagerLoadRelations([$cached]);
+            }
+
             return $cached;
         }
 

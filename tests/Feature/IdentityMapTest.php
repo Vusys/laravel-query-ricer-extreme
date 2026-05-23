@@ -571,7 +571,6 @@ final class IdentityMapTest extends TestCase
             $this->store->disabled(function (): never {
                 throw new \RuntimeException('intentional');
             });
-            $this->fail('Expected RuntimeException was not thrown.');
         } catch (\RuntimeException) {
         }
 

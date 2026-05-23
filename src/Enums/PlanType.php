@@ -16,4 +16,6 @@ enum PlanType: string
     case ReturnScalarFromMemory = 'return_scalar_from_memory';
     case ReturnExistsFromMemory = 'return_exists_from_memory';
     case ReturnCountFromCoverage = 'return_count_from_coverage';
+    case ReturnBelongsToFromMemory = 'return_belongs_to_from_memory';
+    case FilterHasManyInMemory = 'filter_has_many_in_memory';
 }
