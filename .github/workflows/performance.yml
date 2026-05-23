@@ -96,10 +96,8 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         if: steps.db_check.outputs.skip != 'true'
-        with:
-          persist-credentials: false
 
       - name: Setup PHP
         if: steps.db_check.outputs.skip != 'true'

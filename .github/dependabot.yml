@@ -21,3 +21,9 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # v6 breaks checkout in Docker container jobs (service containers) due to a
+      # broken includeIf.gitdir credential path — see actions/checkout#2359, #2386, #2393.
+      # Remove this ignore once the upstream bug is fixed.
+      - dependency-name: "actions/checkout"
+        update-types: ["version-update:semver-major"]
