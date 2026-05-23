@@ -28,7 +28,7 @@ vendor/bin/phpunit tests/Feature/ExampleTest.php
 vendor/bin/phpunit --testsuite Performance    # benchmarks (opt-in)
 ```
 
-Backend matrix — set `DB_CONNECTION` to one of `sqlite` (default), `mysql`, `mariadb`, `pgsql`. CI runs every PHP × Laravel × DB cell (24 total).
+Backend matrix — set `DB_CONNECTION` to one of `sqlite` (default), `mysql`, `mariadb`, `pgsql`. CI runs every PHP × Laravel × DB cell (36 total: 3 PHP × 3 Laravel × 4 DB).
 
 ## Code conventions
 
@@ -39,7 +39,7 @@ Backend matrix — set `DB_CONNECTION` to one of `sqlite` (default), `mysql`, `m
 
 ## Tests
 
-PHPUnit 12 with Orchestra Testbench.
+PHPUnit 11–13 with Orchestra Testbench.
 
 ### Test categories
 - `tests/Unit/` — pure-PHP unit tests (no DB). Extend `PHPUnit\Framework\TestCase` directly — do **not** boot Laravel.
