@@ -68,6 +68,13 @@ class IdentityMapBuilder extends Builder
             return $this->whereKey($id)->first($columns);
         }
 
+        // Queries with non-string SELECT expressions (withCount, selectRaw, …) add
+        // virtual columns to each row that are never stored in the identity map.
+        // Returning a cached model would silently drop those computed attributes.
+        if ((new QueryPatternExtractor($this))->hasNonStringSelectColumns()) {
+            return $this->withoutIdentityMap()->whereKey($id)->first($columns);
+        }
+
         $connection = $this->getModel()->getConnection()->getName() ?? 'default';
         $fingerprint = ScopeFingerprinter::fromBuilder($this);
         $entry = $store->find(

@@ -27,7 +27,32 @@ final readonly class QueryPatternExtractor
             || ($query->unions !== null && $query->unions !== [])
             || $query->lock !== null
             || ($query->groups !== null && $query->groups !== [])
-            || ($query->havings !== null && $query->havings !== []);
+            || ($query->havings !== null && $query->havings !== [])
+            || $this->hasNonStringSelectColumns();
+    }
+
+    /**
+     * Returns true when the query's SELECT list contains non-string expressions —
+     * aggregate subqueries from withCount/withSum/withAvg/withExists, raw expressions
+     * from selectRaw/selectSub, etc.  Such columns are never stored in the identity
+     * map, so any memory-serving path that bypasses SQL would return models missing
+     * those virtual attributes.
+     */
+    public function hasNonStringSelectColumns(): bool
+    {
+        $columns = $this->builder->getQuery()->columns;
+
+        if ($columns === null || $columns === []) {
+            return false;
+        }
+
+        foreach ($columns as $col) {
+            if (! is_string($col)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function extractSinglePrimaryKeyLookup(): int|string|null
@@ -414,7 +439,7 @@ final readonly class QueryPatternExtractor
             return false;
         }
 
-        return true;
+        return ! $this->hasNonStringSelectColumns();
     }
 
     /** @param array<string, mixed> $where */
