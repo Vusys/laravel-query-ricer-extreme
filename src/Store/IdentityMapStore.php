@@ -151,6 +151,10 @@ final class IdentityMapStore
                 $entry->version++;
                 $entry->attributes->mergeFromSaved($model);
             }
+
+            // The model is definitively soft-deleted within this process; record absence
+            // immediately so subsequent default-scope finds skip SQL entirely.
+            $this->absent[$mapKey] = true;
         } else {
             $fingerprint = ScopeFingerprinter::fromModel($model);
             $mapKey = $this->makeKey($model, $key, $fingerprint);
@@ -184,6 +188,10 @@ final class IdentityMapStore
             $this->entries[$mapKey]->state = LifecycleState::Deleted;
             $this->entries[$mapKey]->version++;
         }
+
+        // afterDeleted() fires first (during forceDelete) and records absence, but
+        // force-delete intentionally does not record absence — next find must hit SQL.
+        unset($this->absent[$mapKey]);
     }
 
     public function findEntry(Model $model): ?IdentityEntry
@@ -327,8 +335,12 @@ final class IdentityMapStore
                     $hits[$key] = $entry;
                 } elseif ($entry->state === LifecycleState::Exists) {
                     $unknownKeys[] = $key;
-                } else {
+                } elseif ($entry->state === LifecycleState::SoftDeleted) {
+                    // We know the record is soft-deleted; default scope won't return it.
                     $absentKeys[] = $key;
+                } else {
+                    // Deleted (force-deleted): absence is not recorded by design — fall through to SQL.
+                    $unknownKeys[] = $key;
                 }
             } elseif ($this->isAbsent($connection, $modelClass, $table, $primaryKeyName, $key, $fingerprint)) {
                 $absentKeys[] = $key;
