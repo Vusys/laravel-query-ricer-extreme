@@ -41,11 +41,11 @@ final class MassWriteModelingTest extends TestCase
 
     private function countSql(callable $callback): int
     {
-        $count = 0;
-        DB::listen(function () use (&$count): void {
-            $count++;
-        });
+        DB::enableQueryLog();
+        DB::flushQueryLog();
         $callback();
+        $count = count(DB::getQueryLog());
+        DB::disableQueryLog();
 
         return $count;
     }
@@ -446,14 +446,17 @@ final class MassWriteModelingTest extends TestCase
     {
         $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => false]);
         User::find($alice->id); // warm entry
+        User::where('active', false)->get(); // warm coverage
 
         $this->assertSame(1, $this->store->debugStats()['entries']);
+        $this->assertSame(1, $this->registry->entryCount());
 
         $this->store->disabled(function (): void {
             User::where('active', false)->delete();
         });
 
         $this->assertSame(0, $this->store->debugStats()['entries'], 'Disabled store triggers full flush on mass delete');
+        $this->assertSame(0, $this->registry->entryCount(), 'Disabled store triggers full coverage flush on mass delete');
     }
 
     #[Test]
@@ -461,17 +464,20 @@ final class MassWriteModelingTest extends TestCase
     {
         $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => false]);
         User::find($alice->id); // warm entry
+        User::where('active', false)->get(); // warm coverage
 
         $this->assertSame(1, $this->store->debugStats()['entries']);
+        $this->assertSame(1, $this->registry->entryCount());
 
         // orWhere makes the predicate un-parseable → fallback to full flush
         User::where('active', false)->orWhere('name', 'Alice')->delete();
 
         $this->assertSame(0, $this->store->debugStats()['entries'], 'Unparseable predicate triggers full flush on delete');
+        $this->assertSame(0, $this->registry->entryCount(), 'Unparseable predicate triggers full coverage flush on delete');
     }
 
     // =========================================================================
-    // applyMassUpdate: skips entries for other model classes (line 518)
+    // applyMassUpdate: entries for other model classes are left intact
     // =========================================================================
 
     #[Test]
@@ -486,7 +492,6 @@ final class MassWriteModelingTest extends TestCase
 
         User::where('active', true)->update(['active' => false]);
 
-        // Post entry must not be touched (different modelClass → continue at line 518)
         $this->assertSame(2, $this->store->debugStats()['entries'], 'Post entry must survive a User mass update');
 
         $sql = $this->countSql(function () use ($post): void {
@@ -498,7 +503,7 @@ final class MassWriteModelingTest extends TestCase
     }
 
     // =========================================================================
-    // applyMassDelete: Unknown eviction for hard-delete model (lines 602, 607)
+    // applyMassDelete: Unknown entries are evicted; hard-delete model avoids soft-delete routing
     // =========================================================================
 
     #[Test]
@@ -528,7 +533,7 @@ final class MassWriteModelingTest extends TestCase
     }
 
     // =========================================================================
-    // applyMassDelete: skips non-Exists entries (line 588)
+    // applyMassDelete: entries not in Exists state are left alone
     // =========================================================================
 
     #[Test]
@@ -542,7 +547,7 @@ final class MassWriteModelingTest extends TestCase
 
         $this->assertSame(1, $this->store->debugStats()['entries'], 'SoftDeleted entry still in store after first delete');
 
-        // Second delete: entry state is SoftDeleted (≠ Exists) → line 588 fires, entry skipped.
+        // Entry is already SoftDeleted (not Exists) — the second delete has no effect.
         User::where('active', false)->delete();
 
         // Entry still present (skipped, not evicted) and still absent from default scope.
@@ -551,7 +556,7 @@ final class MassWriteModelingTest extends TestCase
     }
 
     // =========================================================================
-    // applyMassUpdate / applyMassDelete: disabled early-return (lines 511, 578)
+    // applyMassUpdate / applyMassDelete: disabled store returns early without modification
     // =========================================================================
 
     #[Test]
@@ -603,7 +608,7 @@ final class MassWriteModelingTest extends TestCase
     }
 
     // =========================================================================
-    // HasIdentityMap::saved — flushByColumns (line 75)
+    // HasIdentityMap::saved — selective coverage flush for single-model save
     // =========================================================================
 
     #[Test]
@@ -620,8 +625,8 @@ final class MassWriteModelingTest extends TestCase
 
         // Flush the identity store so applyMassUpdate (called during save's performUpdate)
         // finds no matching entry and does NOT call setRawAttributes(sync=true) on $alice.
-        // That keeps $alice dirty after the SQL runs, so getChanges() returns ['name', ...]
-        // in the saved callback, exercising flushByColumns at HasIdentityMap line 75.
+        // That keeps $alice dirty after the SQL runs, so getChanges() returns a non-empty array
+        // in the saved callback, triggering flushByColumns for the changed columns.
         $this->store->flush();
 
         $alice->name = 'Alicia';

@@ -11,6 +11,7 @@ use Vusys\QueryRicerExtreme\Predicate\ComparisonNode;
 use Vusys\QueryRicerExtreme\Predicate\InNode;
 use Vusys\QueryRicerExtreme\Predicate\NullNode;
 use Vusys\QueryRicerExtreme\Predicate\PredicateColumns;
+use Vusys\QueryRicerExtreme\Predicate\PredicateNode;
 
 final class PredicateColumnsTest extends TestCase
 {
@@ -74,5 +75,13 @@ final class PredicateColumnsTest extends TestCase
         sort($columns);
 
         $this->assertSame(['active', 'role'], $columns);
+    }
+
+    #[Test]
+    public function unsupported_node_returns_empty_array(): void
+    {
+        $unknown = new class implements PredicateNode {};
+
+        $this->assertSame([], PredicateColumns::fromNode($unknown));
     }
 }
