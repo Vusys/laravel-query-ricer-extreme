@@ -358,7 +358,7 @@ final class MemoryMorphMany extends MorphMany
             || ($query->havings !== null && $query->havings !== [])
             || $query->lock !== null
             || ($query->offset !== null && $query->offset > 0)
-            || ($query->limit !== null && $query->limit < 1);
+            || $query->limit !== null;
     }
 
     /** @param array<string, mixed> $where */

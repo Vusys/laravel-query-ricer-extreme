@@ -51,6 +51,17 @@ User::where('email', 'alice@example.com')->value('email');   // no SQL
 User::where('email', 'alice@example.com')->exists();         // no SQL — true
 ```
 
+**Relation resolution** — `belongsTo`, `morphTo`, `hasMany`, and `morphMany` are also served from memory when possible:
+
+```php
+$post = Post::find(1);   // User already in the map from earlier work
+
+$post->user;             // no SQL — cached User returned directly
+
+$user->load('posts');
+$user->posts()->where('published', true)->get();   // no SQL — filtered in memory
+```
+
 Absent-key tracking means the package remembers which primary keys and unique-key values returned nothing from a previous query. If those same lookups are repeated under the same scope, no SQL is issued.
 
 This is not a cache. It is an **identity map plus query-elision planner**. Within a configured scope, hydrated model instances are the source of truth for their own known attributes.
@@ -160,6 +171,30 @@ The following are evaluated against cached attributes without touching the datab
 | Multiple `where` chained with `AND` | AND-tree |
 
 Anything the package cannot evaluate in memory falls through to SQL unchanged — unsupported operators (`>`, `<`, `LIKE`, `BETWEEN`), raw `whereRaw` clauses, `orWhere` conditions, and attributes not present on a partially loaded model.
+
+### Relation optimisations
+
+When `HasIdentityMap` is applied, four relation types gain memory-backed implementations. They fall back to SQL transparently on any condition the package cannot safely evaluate in memory.
+
+**`belongsTo` / `morphTo`** — resolved without SQL when the related model is already in the identity map:
+
+```php
+$post->user;       // no SQL if User#N is already in the map
+$comment->owner;   // no SQL for polymorphic relations too
+```
+
+Fallback to SQL when: FK is null, the related model class does not use `HasIdentityMap`, the entry is absent from the map, or the query has joins, unions, groups, havings, or a lock.
+
+**`hasMany` / `morphMany`** — when the parent's relation is already completely loaded, additional `where` constraints are evaluated in memory:
+
+```php
+$user->load('posts');                                    // marks the relation complete in the map
+
+$user->posts()->get();                                   // no SQL — full cached collection
+$user->posts()->where('published', true)->get();         // no SQL — filtered in memory
+```
+
+Fallback to SQL when: the relation has not been loaded, the relation was loaded with extra constraints (constrained eager load), the query adds joins/unions/groups/havings/lock/offset/limit, the predicate cannot be evaluated in memory, or any member of the loaded collection has left the identity map.
 
 ## Scope model
 

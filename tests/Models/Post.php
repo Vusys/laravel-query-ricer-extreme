@@ -11,6 +11,7 @@ use Vusys\QueryRicerExtreme\HasIdentityMap;
 /**
  * @property int $id
  * @property int $user_id
+ * @property int|null $tag_id
  * @property string $title
  * @property bool $published
  */
@@ -19,7 +20,7 @@ final class Post extends Model
     use HasIdentityMap;
 
     /** @var list<string> */
-    protected $fillable = ['user_id', 'title', 'published'];
+    protected $fillable = ['user_id', 'tag_id', 'title', 'published'];
 
     /** @var array<string, string> */
     protected $casts = ['published' => 'boolean'];
@@ -28,5 +29,11 @@ final class Post extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    /** @return BelongsTo<Tag, $this> */
+    public function tag(): BelongsTo
+    {
+        return $this->belongsTo(Tag::class);
     }
 }

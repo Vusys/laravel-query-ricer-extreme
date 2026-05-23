@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\DB;
 use PHPUnit\Framework\Attributes\Test;
 use Vusys\QueryRicerExtreme\Store\IdentityMapStore;
 use Vusys\QueryRicerExtreme\Tests\Models\Comment;
+use Vusys\QueryRicerExtreme\Tests\Models\Tag;
 use Vusys\QueryRicerExtreme\Tests\Models\User;
 use Vusys\QueryRicerExtreme\Tests\TestCase;
 
@@ -82,5 +83,80 @@ final class MorphToMemoryTest extends TestCase
         $this->assertGreaterThan(0, $queryCount, 'morphTo should issue SQL when not in memory');
         $this->assertNotNull($result);
         $this->assertSame($user->id, $result->getKey());
+    }
+
+    #[Test]
+    public function morph_to_falls_back_when_store_is_disabled(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        $comment = Comment::create([
+            'commentable_type' => User::class,
+            'commentable_id' => $user->id,
+            'body' => 'hello',
+        ]);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = $this->store->disabled(fn () => $comment->commentable);
+
+        $this->assertGreaterThan(0, $queryCount, 'morphTo should issue SQL when store disabled');
+        $this->assertNotNull($result);
+    }
+
+    #[Test]
+    public function morph_to_returns_null_when_morph_type_is_null(): void
+    {
+        $comment = new Comment(['commentable_id' => 1, 'body' => 'test']);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = $comment->commentable;
+
+        $this->assertSame(0, $queryCount, 'morphTo should not issue SQL when morph type is null');
+        $this->assertNull($result);
+    }
+
+    #[Test]
+    public function morph_to_returns_null_when_fk_is_null(): void
+    {
+        $comment = new Comment(['commentable_type' => User::class, 'body' => 'test']);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = $comment->commentable;
+
+        $this->assertSame(0, $queryCount, 'morphTo should not issue SQL when FK is null');
+        $this->assertNull($result);
+    }
+
+    #[Test]
+    public function morph_to_falls_back_when_related_has_no_identity_map(): void
+    {
+        $tag = Tag::create(['name' => 'php']);
+        $comment = Comment::create([
+            'commentable_type' => Tag::class,
+            'commentable_id' => $tag->id,
+            'body' => 'hello',
+        ]);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = $comment->commentable;
+
+        $this->assertGreaterThan(0, $queryCount, 'morphTo should issue SQL when related model has no HasIdentityMap');
+        $this->assertNotNull($result);
+        $this->assertInstanceOf(Tag::class, $result);
     }
 }

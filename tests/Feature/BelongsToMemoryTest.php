@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\DB;
 use PHPUnit\Framework\Attributes\Test;
 use Vusys\QueryRicerExtreme\Store\IdentityMapStore;
 use Vusys\QueryRicerExtreme\Tests\Models\Post;
+use Vusys\QueryRicerExtreme\Tests\Models\Tag;
 use Vusys\QueryRicerExtreme\Tests\Models\User;
 use Vusys\QueryRicerExtreme\Tests\TestCase;
 
@@ -87,5 +88,39 @@ final class BelongsToMemoryTest extends TestCase
 
         $this->assertGreaterThan(0, $queryCount, 'belongsTo should issue SQL when store disabled');
         $this->assertNotNull($result);
+    }
+
+    #[Test]
+    public function belongs_to_returns_null_when_fk_is_null(): void
+    {
+        $post = new Post(['title' => 'Draft', 'published' => false]);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = $post->user;
+
+        $this->assertSame(0, $queryCount, 'belongsTo should not issue SQL when FK is null');
+        $this->assertNull($result);
+    }
+
+    #[Test]
+    public function belongs_to_falls_back_when_related_has_no_identity_map(): void
+    {
+        $tag = Tag::create(['name' => 'php']);
+        $post = Post::create(['user_id' => User::create(['name' => 'Alice', 'email' => 'a@example.com'])->id, 'tag_id' => $tag->id, 'title' => 'Hello', 'published' => false]);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = $post->tag;
+
+        $this->assertGreaterThan(0, $queryCount, 'belongsTo should issue SQL when related model has no HasIdentityMap');
+        $this->assertNotNull($result);
+        $this->assertInstanceOf(Tag::class, $result);
     }
 }

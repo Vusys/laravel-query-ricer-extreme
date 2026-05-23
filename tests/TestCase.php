@@ -23,6 +23,7 @@ abstract class TestCase extends OrchestraTestCase
     {
         Schema::dropIfExists('comments');
         Schema::dropIfExists('posts');
+        Schema::dropIfExists('tags');
         Schema::dropIfExists('uuid_users');
         Schema::dropIfExists('users');
 
@@ -44,9 +45,16 @@ abstract class TestCase extends OrchestraTestCase
             $table->softDeletes();
         });
 
+        Schema::create('tags', function (Blueprint $table): void {
+            $table->id();
+            $table->string('name');
+            $table->timestamps();
+        });
+
         Schema::create('posts', function (Blueprint $table): void {
             $table->id();
             $table->foreignId('user_id')->constrained();
+            $table->foreignId('tag_id')->nullable()->constrained();
             $table->string('title');
             $table->boolean('published')->default(false);
             $table->timestamps();
@@ -65,6 +73,7 @@ abstract class TestCase extends OrchestraTestCase
     {
         Schema::dropIfExists('comments');
         Schema::dropIfExists('posts');
+        Schema::dropIfExists('tags');
         Schema::dropIfExists('uuid_users');
         Schema::dropIfExists('users');
         DB::disconnect();
