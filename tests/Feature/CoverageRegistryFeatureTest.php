@@ -780,7 +780,6 @@ final class CoverageRegistryFeatureTest extends TestCase
         $this->registry->flush();
         User::create(['name' => 'Carol', 'email' => 'carol@example.com', 'active' => true]);
         User::where('active', true)->get();
-        $this->store->flush();
 
         $sql = $this->countSql(function (): void {
             $users = User::withCount('posts')->where('active', true)->get();
@@ -801,7 +800,6 @@ final class CoverageRegistryFeatureTest extends TestCase
         User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => true]);
 
         User::where('active', true)->get();
-        $this->store->flush();
 
         $sql = $this->countSql(function (): void {
             $results = User::selectRaw('*, 42 as magic_number')->where('active', true)->get();

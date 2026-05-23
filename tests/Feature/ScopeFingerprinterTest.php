@@ -85,6 +85,10 @@ final class ScopeFingerprinterTest extends TestCase
     {
         $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => true]);
 
+        $fpDefault = ScopeFingerprinter::fromBuilder(User::query());
+        $fpWithoutScope = ScopeFingerprinter::fromBuilder(User::withoutGlobalScope(SoftDeletingScope::class));
+        $this->assertNotSame($fpDefault, $fpWithoutScope, 'withoutGlobalScope must produce a different scope fingerprint');
+
         $default = User::find($alice->id);
         $this->assertInstanceOf(User::class, $default);
 
