@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Vusys\QueryRicerExtreme\Query;
 
+use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Contracts\Support\Arrayable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
@@ -666,6 +667,233 @@ class IdentityMapBuilder extends Builder
         }
 
         return parent::count($columns);
+    }
+
+    /** @param Expression|string $column */
+    public function sum($column): mixed
+    {
+        if ($this->identityMapDisabled) {
+            return parent::sum($column);
+        }
+
+        $store = resolve(IdentityMapStore::class);
+
+        if ($store->isDisabled() || ! is_string($column)) {
+            return parent::sum($column);
+        }
+
+        /** @var TModel $model */
+        $model = $this->getModel();
+        $connection = $model->getConnection()->getName() ?? 'default';
+        $fingerprint = ScopeFingerprinter::fromBuilder($this);
+        $extractor = new QueryPatternExtractor($this);
+
+        $coveredModels = $this->getModelsFromCoverage([$column], $store, $connection, $fingerprint, $extractor);
+
+        if ($coveredModels === null) {
+            return parent::sum($column);
+        }
+
+        $total = 0;
+
+        foreach ($coveredModels as $m) {
+            $val = $m->getAttribute($column);
+
+            if (! is_int($val) && ! is_float($val)) {
+                return parent::sum($column);
+            }
+
+            $total += $val;
+        }
+
+        $store->capture(new Explanation(
+            type: PlanType::ReturnSumFromCoverage,
+            modelClass: $model::class,
+            reason: 'coverage-subset-hit',
+            sqlExecuted: false,
+        ));
+
+        return $total;
+    }
+
+    /** @param Expression|string $column */
+    public function min($column): mixed
+    {
+        if ($this->identityMapDisabled) {
+            return parent::min($column);
+        }
+
+        $store = resolve(IdentityMapStore::class);
+
+        if ($store->isDisabled() || ! is_string($column)) {
+            return parent::min($column);
+        }
+
+        /** @var TModel $model */
+        $model = $this->getModel();
+        $connection = $model->getConnection()->getName() ?? 'default';
+        $fingerprint = ScopeFingerprinter::fromBuilder($this);
+        $extractor = new QueryPatternExtractor($this);
+
+        $coveredModels = $this->getModelsFromCoverage([$column], $store, $connection, $fingerprint, $extractor);
+
+        if ($coveredModels === null) {
+            return parent::min($column);
+        }
+
+        if ($coveredModels === []) {
+            $store->capture(new Explanation(
+                type: PlanType::ReturnMinFromCoverage,
+                modelClass: $model::class,
+                reason: 'coverage-subset-hit',
+                sqlExecuted: false,
+            ));
+
+            return null;
+        }
+
+        $values = [];
+
+        foreach ($coveredModels as $m) {
+            $val = $m->getAttribute($column);
+
+            if (! is_int($val) && ! is_float($val)) {
+                return parent::min($column);
+            }
+
+            $values[] = $val;
+        }
+
+        $store->capture(new Explanation(
+            type: PlanType::ReturnMinFromCoverage,
+            modelClass: $model::class,
+            reason: 'coverage-subset-hit',
+            sqlExecuted: false,
+        ));
+
+        return min($values);
+    }
+
+    /** @param Expression|string $column */
+    public function max($column): mixed
+    {
+        if ($this->identityMapDisabled) {
+            return parent::max($column);
+        }
+
+        $store = resolve(IdentityMapStore::class);
+
+        if ($store->isDisabled() || ! is_string($column)) {
+            return parent::max($column);
+        }
+
+        /** @var TModel $model */
+        $model = $this->getModel();
+        $connection = $model->getConnection()->getName() ?? 'default';
+        $fingerprint = ScopeFingerprinter::fromBuilder($this);
+        $extractor = new QueryPatternExtractor($this);
+
+        $coveredModels = $this->getModelsFromCoverage([$column], $store, $connection, $fingerprint, $extractor);
+
+        if ($coveredModels === null) {
+            return parent::max($column);
+        }
+
+        if ($coveredModels === []) {
+            $store->capture(new Explanation(
+                type: PlanType::ReturnMaxFromCoverage,
+                modelClass: $model::class,
+                reason: 'coverage-subset-hit',
+                sqlExecuted: false,
+            ));
+
+            return null;
+        }
+
+        $values = [];
+
+        foreach ($coveredModels as $m) {
+            $val = $m->getAttribute($column);
+
+            if (! is_int($val) && ! is_float($val)) {
+                return parent::max($column);
+            }
+
+            $values[] = $val;
+        }
+
+        $store->capture(new Explanation(
+            type: PlanType::ReturnMaxFromCoverage,
+            modelClass: $model::class,
+            reason: 'coverage-subset-hit',
+            sqlExecuted: false,
+        ));
+
+        return max($values);
+    }
+
+    /** @param Expression|string $column */
+    public function avg($column): mixed
+    {
+        if ($this->identityMapDisabled) {
+            return parent::avg($column);
+        }
+
+        $store = resolve(IdentityMapStore::class);
+
+        if ($store->isDisabled() || ! is_string($column)) {
+            return parent::avg($column);
+        }
+
+        /** @var TModel $model */
+        $model = $this->getModel();
+        $connection = $model->getConnection()->getName() ?? 'default';
+        $fingerprint = ScopeFingerprinter::fromBuilder($this);
+        $extractor = new QueryPatternExtractor($this);
+
+        $coveredModels = $this->getModelsFromCoverage([$column], $store, $connection, $fingerprint, $extractor);
+
+        if ($coveredModels === null) {
+            return parent::avg($column);
+        }
+
+        if ($coveredModels === []) {
+            $store->capture(new Explanation(
+                type: PlanType::ReturnAvgFromCoverage,
+                modelClass: $model::class,
+                reason: 'coverage-subset-hit',
+                sqlExecuted: false,
+            ));
+
+            return null;
+        }
+
+        $values = [];
+
+        foreach ($coveredModels as $m) {
+            $val = $m->getAttribute($column);
+
+            if (! is_int($val) && ! is_float($val)) {
+                return parent::avg($column);
+            }
+
+            $values[] = $val;
+        }
+
+        $store->capture(new Explanation(
+            type: PlanType::ReturnAvgFromCoverage,
+            modelClass: $model::class,
+            reason: 'coverage-subset-hit',
+            sqlExecuted: false,
+        ));
+
+        return (float) (array_sum($values) / count($values));
+    }
+
+    /** @param Expression|string $column */
+    public function average($column): mixed
+    {
+        return $this->avg($column);
     }
 
     /**

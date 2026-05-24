@@ -23,4 +23,8 @@ enum PlanType: string
     case ReturnPluckFromCoverage = 'return_pluck_from_coverage';
     case ReturnFirstFromCoverage = 'return_first_from_coverage';
     case ReturnSoleFromCoverage = 'return_sole_from_coverage';
+    case ReturnSumFromCoverage = 'return_sum_from_coverage';
+    case ReturnMinFromCoverage = 'return_min_from_coverage';
+    case ReturnMaxFromCoverage = 'return_max_from_coverage';
+    case ReturnAvgFromCoverage = 'return_avg_from_coverage';
 }
