@@ -111,4 +111,23 @@ final class GraphInvalidationTest extends TestCase
         $this->assertSame(0, $this->graph->coverageCount());
         $this->assertSame(0, $this->graph->edgeCount());
     }
+
+    #[Test]
+    public function mass_update_on_parent_invalidates_parent_class_graph_coverage(): void
+    {
+        $user = User::create(['name' => 'A', 'email' => 'a@example.com']);
+        Post::create(['user_id' => $user->id, 'title' => 'P1', 'published' => true]);
+
+        $user->load('posts');
+        $identity = ModelIdentity::fromModel($user);
+        $this->assertNotNull($identity);
+        $this->assertNotNull($this->graph->coverageFor($identity, 'posts'));
+
+        User::where('id', $user->id)->update(['name' => 'B']);
+
+        $this->assertNull(
+            $this->graph->coverageFor($identity, 'posts'),
+            'mass update on User must invalidate coverage where User is the parent class',
+        );
+    }
 }

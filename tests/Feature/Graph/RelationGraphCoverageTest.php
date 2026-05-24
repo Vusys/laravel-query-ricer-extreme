@@ -46,6 +46,8 @@ final class RelationGraphCoverageTest extends TestCase
         $this->assertNotNull($coverage);
         $this->assertTrue($coverage->complete);
         $this->assertCount(2, $coverage->childPrimaryKeys);
+        $this->assertTrue($coverage->columns->allColumns, 'load() records ColumnSet([*])');
+        $this->assertCount(2, $this->graph->edgesFrom($identity, 'posts'), 'one edge per loaded child');
     }
 
     #[Test]
@@ -61,6 +63,7 @@ final class RelationGraphCoverageTest extends TestCase
         $identity = ModelIdentity::fromModel($loaded);
         $this->assertNotNull($identity);
         $this->assertNotNull($this->graph->coverageFor($identity, 'posts'));
+        $this->assertCount(1, $this->graph->edgesFrom($identity, 'posts'), 'matchMany records one edge per child');
     }
 
     #[Test]
@@ -115,6 +118,15 @@ final class RelationGraphCoverageTest extends TestCase
         Comment::create(['commentable_type' => User::class, 'commentable_id' => $user->id, 'body' => 'c2']);
 
         $user->load('comments');
+
+        $identity = ModelIdentity::fromModel($user);
+        $this->assertNotNull($identity);
+        $this->assertCount(
+            2,
+            $this->graph->edgesFrom($identity, 'comments'),
+            'morph-many records one edge per child',
+        );
+
         $user->unsetRelation('comments');
 
         $queryCount = 0;
@@ -158,6 +170,29 @@ final class RelationGraphCoverageTest extends TestCase
         $identity = ModelIdentity::fromModel($user);
         $this->assertNotNull($identity);
         $this->assertNull($this->graph->coverageFor($identity, 'posts'));
+    }
+
+    #[Test]
+    public function model_identity_from_model_uses_explicit_fingerprint_when_provided(): void
+    {
+        $user = User::create(['name' => 'A', 'email' => 'a@example.com']);
+
+        $identity = ModelIdentity::fromModel($user, 'custom-fingerprint');
+
+        $this->assertNotNull($identity);
+        $this->assertSame('custom-fingerprint', $identity->scopeFingerprint);
+    }
+
+    #[Test]
+    public function model_identity_from_model_uses_actual_connection_name(): void
+    {
+        $user = User::create(['name' => 'A', 'email' => 'a@example.com']);
+        $user->setConnection('explicit-name');
+
+        $identity = ModelIdentity::fromModel($user, 'fp');
+
+        $this->assertNotNull($identity);
+        $this->assertSame('explicit-name', $identity->connection);
     }
 
     #[Test]

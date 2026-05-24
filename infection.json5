@@ -71,6 +71,13 @@
                 ".*getModelsFromCoverage\\(\\[\\$column\\].*"
             ]
         },
+        // ModelIdentity::key — implode() handles int|string natively, so the explicit (string) cast on
+        // $primaryKeyValue is defensive and produces identical output without it.
+        "CastString": {
+            "ignoreSourceCodeByRegex": [
+                ".*\\(string\\) \\$this->primaryKeyValue.*"
+            ]
+        },
     },
     minMsi: 0,
     minCoveredMsi: 0,
