@@ -157,10 +157,14 @@ final class LifecycleStateTest extends TestCase
     public static function mixedLifecycleKeySetProvider(): array
     {
         return [
-            'exists + absent → no SQL, 1 result' => [['exists', 'absent'],       0, 1],
-            'exists + soft-deleted → no SQL, 1 result' => [['exists', 'soft-deleted'], 0, 1],
-            'exists + saved → no SQL, 2 results' => [['exists', 'saved'],        0, 2],
-            'absent + soft-deleted → no SQL, 0 results' => [['absent', 'soft-deleted'], 0, 0],
+            'exists + absent → no SQL, 1 result' => [['exists', 'absent'],                        0, 1],
+            'exists + soft-deleted → no SQL, 1 result' => [['exists', 'soft-deleted'],             0, 1],
+            'exists + saved → no SQL, 2 results' => [['exists', 'saved'],                          0, 2],
+            'absent + soft-deleted → no SQL, 0 results' => [['absent', 'soft-deleted'],            0, 0],
+            'exists + absent + soft-deleted → no SQL, 1 result' => [['exists', 'absent', 'soft-deleted'],  0, 1],
+            'exists + saved + absent → no SQL, 2 results' => [['exists', 'saved', 'absent'],       0, 2],
+            'restored + saved + absent → no SQL, 2 results' => [['restored', 'saved', 'absent'],   0, 2],
+            'exists + soft-deleted + saved → no SQL, 2 results' => [['exists', 'soft-deleted', 'saved'], 0, 2],
         ];
     }
 

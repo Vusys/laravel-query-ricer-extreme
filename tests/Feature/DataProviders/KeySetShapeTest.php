@@ -42,6 +42,8 @@ final class KeySetShapeTest extends TestCase
             '3 keys' => [3],
             '5 keys' => [5],
             '10 keys' => [10],
+            '20 keys' => [20],
+            '50 keys' => [50],
         ];
     }
 
@@ -72,6 +74,7 @@ final class KeySetShapeTest extends TestCase
             '1 key' => [1],
             '2 keys' => [2],
             '5 keys' => [5],
+            '20 keys' => [20],
         ];
     }
 
@@ -105,6 +108,9 @@ final class KeySetShapeTest extends TestCase
             '2 warm + 1 cold' => [2, 1],
             '3 warm + 2 cold' => [3, 2],
             '5 warm + 5 cold' => [5, 5],
+            '10 warm + 10 cold' => [10, 10],
+            '20 warm + 10 cold' => [20, 10],
+            '25 warm + 25 cold' => [25, 25],
         ];
     }
 
@@ -137,6 +143,8 @@ final class KeySetShapeTest extends TestCase
             '1 absent key' => [1],
             '2 absent keys' => [2],
             '4 absent keys' => [4],
+            '10 absent keys' => [10],
+            '20 absent keys' => [20],
         ];
     }
 
@@ -172,6 +180,8 @@ final class KeySetShapeTest extends TestCase
             '1 known + 1 absent' => [1, 1],
             '2 known + 2 absent' => [2, 2],
             '3 known + 1 absent' => [3, 1],
+            '5 known + 5 absent' => [5, 5],
+            '10 known + 5 absent' => [10, 5],
         ];
     }
 
@@ -241,6 +251,8 @@ final class KeySetShapeTest extends TestCase
             '1 live + 1 deleted' => [1, 1],
             '2 live + 1 deleted' => [2, 1],
             '1 live + 2 deleted' => [1, 2],
+            '5 live + 3 deleted' => [5, 3],
+            '10 live + 5 deleted' => [10, 5],
         ];
     }
 

@@ -42,9 +42,12 @@ final class PkTypeTest extends TestCase
             'integer pk — 1 model' => [User::class,     1],
             'integer pk — 3 models' => [User::class,     3],
             'integer pk — 5 models' => [User::class,     5],
+            'integer pk — 20 models' => [User::class,    20],
+            'integer pk — 50 models' => [User::class,    50],
             'uuid pk — 1 model' => [UuidUser::class, 1],
             'uuid pk — 3 models' => [UuidUser::class, 3],
             'uuid pk — 5 models' => [UuidUser::class, 5],
+            'uuid pk — 20 models' => [UuidUser::class, 20],
         ];
     }
 

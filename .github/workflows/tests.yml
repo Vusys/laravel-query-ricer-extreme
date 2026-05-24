@@ -230,7 +230,7 @@ jobs:
           DB_DATABASE: ${{ matrix.db_database }}
           DB_USERNAME: ${{ matrix.db_username }}
           DB_PASSWORD: ${{ matrix.db_password }}
-        run: vendor/bin/phpunit --group comprehensive
+        run: vendor/bin/phpunit --group comprehensive,fuzzer
 
   static-analysis:
     runs-on: ubuntu-latest
