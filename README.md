@@ -132,7 +132,7 @@ User::where('active', true)->get();  // loads all active users; coverage recorde
 User::where('active', true)->where('role', 'admin')->get();  // no SQL — subset answered from memory
 ```
 
-**process_truth mode** — unsaved in-memory attribute changes are treated as authoritative:
+**process_truth** (`attribute_truth = 'process_truth'` in config) — unsaved in-memory attribute changes are treated as authoritative:
 
 ```php
 $user->active = false;  // dirty, not yet saved
@@ -247,8 +247,8 @@ $explanations = IdentityMap::explain(fn () => User::whereKey([1, 2, 3])->where('
 // Plan: rewrite_predicate_and_merge
 // Model: App\Models\User
 // Reason: ...
-// Known keys: [1, 2]   ← evaluated in-memory (match or reject)
-// SQL keys: [3]         ← unknown, sent to database
+// Known keys: [1, 2]      ← evaluated in-memory (match or reject)
+// Missing keys: [3]       ← unknown, sent to database
 // SQL executed: yes
 ```
 
@@ -415,9 +415,17 @@ The `mode` config key controls how aggressively the package serves queries from 
 | `predicate` | Everything above, plus AND-predicate evaluation against known attributes for key-set queries. | |
 | `unique_key` | Everything above, plus `where('email', ...)->first()` served from the secondary unique-key index. | |
 | `coverage` | Everything above, plus whole query regions answered from memory when all matching models are loaded. | |
-| `process_truth` | Everything above, plus dirty in-memory attribute values treated as authoritative for predicate evaluation. Implies `predicate`. | |
 
 The `IDENTITY_MAP_MODE` environment variable may be used to override the config value without republishing.
+
+**process_truth** is a separate setting controlled by a different config key. It is not a value of `mode`. Enable it by setting `attribute_truth` in the published config:
+
+```php
+// config/query-ricer-extreme.php
+'attribute_truth' => 'process_truth',
+```
+
+When enabled, predicate evaluation uses the current in-memory attribute value (which may be dirty) rather than the original committed value. The unique-key index path is bypassed entirely under this setting, since the index is keyed on original values.
 
 ### Lifecycle hooks and automatic flushing
 
