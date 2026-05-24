@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Vusys\QueryRicerExtreme\Tests\Fuzz;
 
+use Illuminate\Database\QueryException;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -71,7 +72,11 @@ abstract class DualDatabaseTestCase extends FuzzerTestCase
     {
         try {
             DB::statement('CREATE DATABASE "'.self::SECONDARY.'"');
-        } catch (\Throwable) {
+        } catch (QueryException $e) {
+            // 42P04 = duplicate_database; suppress only this, surface everything else
+            if (($e->errorInfo[0] ?? null) !== '42P04') {
+                throw $e;
+            }
         }
     }
 
