@@ -24,4 +24,10 @@ final class IdentityEntry
         public LifecycleState $state,
         public int $version,
     ) {}
+
+    public function __clone(): void
+    {
+        $this->attributes = clone $this->attributes;
+        $this->relations = clone $this->relations;
+    }
 }

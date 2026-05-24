@@ -39,7 +39,7 @@ final class IdentityMapStore
     /** @var list<Explanation> */
     private array $captured = [];
 
-    public function __construct()
+    public function __construct(private readonly ?TransactionJournal $journal = null)
     {
         $this->uniqueKeyIndex = new UniqueKeyIndex;
     }
@@ -67,6 +67,8 @@ final class IdentityMapStore
 
         $fingerprint = $this->pendingFingerprint ?? ScopeFingerprinter::fromModel($model);
         $mapKey = $this->makeKey($model, $key, $fingerprint);
+
+        $this->snapshotForJournal($mapKey);
 
         if (isset($this->entries[$mapKey])) {
             $entry = $this->entries[$mapKey];
@@ -124,6 +126,8 @@ final class IdentityMapStore
         $fingerprint = ScopeFingerprinter::fromModel($model);
         $mapKey = $this->makeKey($model, $key, $fingerprint);
 
+        $this->snapshotForJournal($mapKey);
+
         if (isset($this->entries[$mapKey])) {
             $entry = $this->entries[$mapKey];
             $entry->model = $model;
@@ -160,6 +164,8 @@ final class IdentityMapStore
                 'soft-delete:default',
             );
 
+            $this->snapshotForJournal($mapKey);
+
             if (isset($this->entries[$mapKey])) {
                 $entry = $this->entries[$mapKey];
                 $entry->state = LifecycleState::SoftDeleted;
@@ -173,6 +179,8 @@ final class IdentityMapStore
         } else {
             $fingerprint = ScopeFingerprinter::fromModel($model);
             $mapKey = $this->makeKey($model, $key, $fingerprint);
+
+            $this->snapshotForJournal($mapKey);
 
             if (isset($this->entries[$mapKey])) {
                 $this->entries[$mapKey]->state = LifecycleState::Deleted;
@@ -279,6 +287,8 @@ final class IdentityMapStore
             $primaryKeyValue,
             $fingerprint,
         );
+
+        $this->snapshotForJournal($mapKey);
 
         $this->absent[$mapKey] = true;
     }
@@ -536,6 +546,7 @@ final class IdentityMapStore
             $evalResult = $evaluator->evaluate($entry->attributes, $predicate);
 
             if ($evalResult === EvaluationResult::Match) {
+                $this->snapshotForJournal($mapKey);
                 $rawAttrs = $entry->model->getAttributes();
 
                 foreach ($values as $col => $val) {
@@ -565,6 +576,7 @@ final class IdentityMapStore
                 $entry->version++;
                 $this->uniqueKeyIndex->index($entry, $mapKey);
             } elseif ($evalResult === EvaluationResult::Unknown) {
+                $this->snapshotForJournal($mapKey);
                 $keysToEvict[] = $mapKey;
             }
         }
@@ -605,6 +617,8 @@ final class IdentityMapStore
             $evalResult = $evaluator->evaluate($entry->attributes, $predicate);
 
             if ($evalResult === EvaluationResult::Match) {
+                $this->snapshotForJournal($mapKey);
+
                 if ($softDeletes) {
                     $entry->state = LifecycleState::SoftDeleted;
                     $this->absent[$mapKey] = true;
@@ -614,6 +628,7 @@ final class IdentityMapStore
 
                 $entry->version++;
             } elseif ($evalResult === EvaluationResult::Unknown) {
+                $this->snapshotForJournal($mapKey);
                 $keysToEvict[] = $mapKey;
             }
         }
@@ -660,6 +675,80 @@ final class IdentityMapStore
         }
 
         $this->uniqueKeyIndex->markDiscovered($modelClass);
+    }
+
+    /**
+     * Record the pre-mutation state of $entryKey in the journal, if a transaction is active
+     * on the entry's connection. Idempotent within a single transaction level — only the
+     * first snapshot per key is kept.
+     */
+    private function snapshotForJournal(string $entryKey): void
+    {
+        if (! $this->journal instanceof TransactionJournal) {
+            return;
+        }
+
+        // entryKey format: "{connection}|{modelClass}|..."
+        $parts = explode('|', $entryKey, 3);
+        if (count($parts) < 2) {
+            return;
+        }
+        [$connection, $modelClass] = $parts;
+
+        if (! $this->journal->isActive($connection)) {
+            return;
+        }
+
+        $existing = $this->entries[$entryKey] ?? null;
+        $wasAbsent = isset($this->absent[$entryKey]);
+
+        $this->journal->snapshot($connection, new JournalEntry(
+            entryKey: $entryKey,
+            modelClass: $modelClass,
+            before: $existing === null ? null : clone $existing,
+            wasAbsent: $wasAbsent,
+            modelOriginal: $existing?->model->getRawOriginal(),
+        ));
+    }
+
+    /**
+     * Apply rolled-back snapshots to the identity map.
+     *
+     * For each journal entry: restore the absent flag, then either remove the entry
+     * (if it didn't exist before the transaction) or replace it with the snapshot
+     * and reset the underlying model's raw attributes to their pre-transaction state.
+     * Restored entries are re-indexed in the unique-key index so subsequent
+     * findByUniqueKey() lookups see the restored values; stale in-tx fingerprints
+     * are evicted lazily on lookup.
+     *
+     * @param  list<JournalEntry>  $entries
+     */
+    public function restoreFromJournal(array $entries): void
+    {
+        foreach ($entries as $journalEntry) {
+            if ($journalEntry->wasAbsent) {
+                $this->absent[$journalEntry->entryKey] = true;
+            } else {
+                unset($this->absent[$journalEntry->entryKey]);
+            }
+
+            if ($journalEntry->before === null) {
+                unset($this->entries[$journalEntry->entryKey]);
+
+                continue;
+            }
+
+            $this->entries[$journalEntry->entryKey] = $journalEntry->before;
+
+            if ($journalEntry->modelOriginal !== null) {
+                $journalEntry->before->model->setRawAttributes(
+                    $journalEntry->modelOriginal,
+                    true,
+                );
+            }
+
+            $this->uniqueKeyIndex->index($journalEntry->before, $journalEntry->entryKey);
+        }
     }
 
     private function makeKey(Model $model, int|string $primaryKeyValue, string $fingerprint): string

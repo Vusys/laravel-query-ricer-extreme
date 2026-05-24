@@ -22,7 +22,10 @@
         },
         // isset() returns true for any non-null value, so true vs false is unobservable here
         "TrueValue": {
-            "ignoreSourceCodeByRegex": ["absent\\[\\$mapKey\\] = true"]
+            "ignoreSourceCodeByRegex": [
+                ".*absent\\[\\$mapKey\\] = true.*",
+                ".*absent\\[\\$journalEntry->entryKey\\] = true.*",
+            ]
         },
         // break vs continue after $found = true are equivalent — $found cannot be unset by remaining iterations
         "Break_": {

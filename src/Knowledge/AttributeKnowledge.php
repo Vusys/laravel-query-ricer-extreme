@@ -15,6 +15,17 @@ final class AttributeKnowledge
 
     public bool $allColumnsKnown = false;
 
+    public function __clone(): void
+    {
+        $cloned = [];
+
+        foreach ($this->facts as $column => $fact) {
+            $cloned[$column] = clone $fact;
+        }
+
+        $this->facts = $cloned;
+    }
+
     public function knows(string $column): bool
     {
         return isset($this->facts[$column]);
