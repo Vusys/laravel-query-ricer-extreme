@@ -248,12 +248,16 @@ final class AggregateFromCoverageTest extends TestCase
         User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => true, 'score' => 10]);
         User::where('active', true)->get();
 
-        $sql = $this->countSql(function (): void {
-            // 'name' is a string column — non-numeric values must force SQL fallthrough.
-            User::where('active', true)->sum('name');
-        });
+        // 'name' is a string column — non-numeric values must force SQL fallthrough
+        // on every aggregate. Run each in its own listener scope so we measure
+        // each aggregate independently.
+        foreach (['sum', 'min', 'max', 'avg'] as $method) {
+            $sql = $this->countSql(function () use ($method): void {
+                User::where('active', true)->{$method}('name');
+            });
 
-        $this->assertSame(1, $sql, 'Non-numeric attribute values must force SQL fallthrough');
+            $this->assertSame(1, $sql, "{$method}() on a string column must fall through to SQL");
+        }
     }
 
     #[Test]
@@ -326,6 +330,71 @@ final class AggregateFromCoverageTest extends TestCase
         });
 
         $this->assertSame(1, $sql, 'Aggregate with non-string column expression must fall through to SQL');
+    }
+
+    // -------------------------------------------------------------------------
+    // Empty-set captures explanation with sqlExecuted = false
+    // -------------------------------------------------------------------------
+
+    #[Test]
+    public function empty_region_min_captures_explanation_without_sql(): void
+    {
+        User::where('active', true)->get();
+
+        $explanations = $this->store->explain(function (): void {
+            $this->assertNull(User::where('active', true)->min('score'));
+        });
+
+        $hit = $this->findExplanationByType($explanations, PlanType::ReturnMinFromCoverage);
+        $this->assertFalse($hit->sqlExecuted, 'empty-set min must capture with sqlExecuted=false');
+    }
+
+    #[Test]
+    public function empty_region_max_captures_explanation_without_sql(): void
+    {
+        User::where('active', true)->get();
+
+        $explanations = $this->store->explain(function (): void {
+            $this->assertNull(User::where('active', true)->max('score'));
+        });
+
+        $hit = $this->findExplanationByType($explanations, PlanType::ReturnMaxFromCoverage);
+        $this->assertFalse($hit->sqlExecuted, 'empty-set max must capture with sqlExecuted=false');
+    }
+
+    #[Test]
+    public function empty_region_avg_captures_explanation_without_sql(): void
+    {
+        User::where('active', true)->get();
+
+        $explanations = $this->store->explain(function (): void {
+            $this->assertNull(User::where('active', true)->avg('score'));
+        });
+
+        $hit = $this->findExplanationByType($explanations, PlanType::ReturnAvgFromCoverage);
+        $this->assertFalse($hit->sqlExecuted, 'empty-set avg must capture with sqlExecuted=false');
+    }
+
+    // -------------------------------------------------------------------------
+    // Partial-column coverage must force SQL for aggregates
+    // -------------------------------------------------------------------------
+
+    #[Test]
+    public function partial_column_coverage_forces_aggregate_fallthrough_to_sql(): void
+    {
+        // Coverage records ['id', 'name'] only — 'score' is not loaded into the
+        // identity map. An aggregate over 'score' must fall through to SQL
+        // rather than reading null attribute values out of partially-loaded models.
+        User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => true, 'score' => 10]);
+        User::where('active', true)->get(['id', 'name']);
+
+        foreach (['sum', 'min', 'max', 'avg'] as $method) {
+            $sql = $this->countSql(function () use ($method): void {
+                User::where('active', true)->{$method}('score');
+            });
+
+            $this->assertSame(1, $sql, "{$method}() on a column missing from partial coverage must fall through to SQL");
+        }
     }
 
     // -------------------------------------------------------------------------
