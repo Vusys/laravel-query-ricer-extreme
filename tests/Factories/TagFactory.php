@@ -19,6 +19,8 @@ final class TagFactory extends Factory
     {
         return [
             'name' => fake()->unique()->word(),
+            'priority' => fake()->numberBetween(0, 5),
+            'color' => fake()->optional()->hexColor(),
         ];
     }
 }

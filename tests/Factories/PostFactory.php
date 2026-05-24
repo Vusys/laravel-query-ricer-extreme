@@ -23,6 +23,8 @@ final class PostFactory extends Factory
             'tag_id' => null,
             'title' => fake()->sentence(4),
             'published' => false,
+            'view_count' => fake()->numberBetween(0, 999),
+            'rating' => fake()->optional()->randomFloat(1, 1.0, 5.0),
         ];
     }
 

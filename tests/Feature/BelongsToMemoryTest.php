@@ -8,8 +8,8 @@ use Illuminate\Support\Facades\DB;
 use PHPUnit\Framework\Attributes\Test;
 use Vusys\QueryRicerExtreme\Explanation;
 use Vusys\QueryRicerExtreme\Store\IdentityMapStore;
+use Vusys\QueryRicerExtreme\Tests\Models\Label;
 use Vusys\QueryRicerExtreme\Tests\Models\Post;
-use Vusys\QueryRicerExtreme\Tests\Models\Tag;
 use Vusys\QueryRicerExtreme\Tests\Models\User;
 use Vusys\QueryRicerExtreme\Tests\TestCase;
 
@@ -110,41 +110,41 @@ final class BelongsToMemoryTest extends TestCase
     #[Test]
     public function belongs_to_falls_back_when_related_has_no_identity_map(): void
     {
-        $tag = Tag::create(['name' => 'php']);
-        $post = Post::create(['user_id' => User::create(['name' => 'Alice', 'email' => 'a@example.com'])->id, 'tag_id' => $tag->id, 'title' => 'Hello', 'published' => false]);
+        $label = Label::create(['name' => 'php']);
+        $post = Post::create(['user_id' => User::create(['name' => 'Alice', 'email' => 'a@example.com'])->id, 'label_id' => $label->id, 'title' => 'Hello', 'published' => false]);
 
         $queryCount = 0;
         DB::listen(function () use (&$queryCount): void {
             $queryCount++;
         });
 
-        $result = $post->tag;
+        $result = $post->label;
 
         $this->assertGreaterThan(0, $queryCount, 'belongsTo should issue SQL when related model has no HasIdentityMap');
         $this->assertNotNull($result);
-        $this->assertInstanceOf(Tag::class, $result);
+        $this->assertInstanceOf(Label::class, $result);
     }
 
     #[Test]
     public function belongs_to_falls_back_when_related_without_trait_is_in_store(): void
     {
-        // Tag lacks HasIdentityMap. Manually putting it in the store must not cause the
+        // Label lacks HasIdentityMap. Manually putting it in the store must not cause the
         // belongsTo to serve it from memory — the !in_array(HasIdentityMap) guard must fire.
         $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
-        $tag = Tag::create(['name' => 'php']);
-        $post = Post::create(['user_id' => $user->id, 'tag_id' => $tag->id, 'title' => 'Hello', 'published' => false]);
+        $label = Label::create(['name' => 'php']);
+        $post = Post::create(['user_id' => $user->id, 'label_id' => $label->id, 'title' => 'Hello', 'published' => false]);
 
-        $this->store->remember($tag);
+        $this->store->remember($label);
 
         $queryCount = 0;
         DB::listen(function () use (&$queryCount): void {
             $queryCount++;
         });
 
-        $result = $post->tag;
+        $result = $post->label;
 
         $this->assertGreaterThan(0, $queryCount, 'belongsTo must fall back to SQL when related model lacks HasIdentityMap, even if the entry is in the store');
-        $this->assertInstanceOf(Tag::class, $result);
+        $this->assertInstanceOf(Label::class, $result);
     }
 
     #[Test]

@@ -15,8 +15,11 @@ use Vusys\QueryRicerExtreme\Tests\Factories\PostFactory;
  * @property int $id
  * @property int $user_id
  * @property int|null $tag_id
+ * @property int|null $label_id
  * @property string $title
  * @property bool $published
+ * @property int $view_count
+ * @property float|null $rating
  */
 final class Post extends Model
 {
@@ -32,10 +35,14 @@ final class Post extends Model
     }
 
     /** @var list<string> */
-    protected $fillable = ['user_id', 'tag_id', 'title', 'published'];
+    protected $fillable = ['user_id', 'tag_id', 'label_id', 'title', 'published', 'view_count', 'rating'];
 
     /** @var array<string, string> */
-    protected $casts = ['published' => 'boolean'];
+    protected $casts = [
+        'published' => 'boolean',
+        'view_count' => 'integer',
+        'rating' => 'float',
+    ];
 
     /** @return BelongsTo<User, $this> */
     public function user(): BelongsTo
@@ -47,5 +54,11 @@ final class Post extends Model
     public function tag(): BelongsTo
     {
         return $this->belongsTo(Tag::class);
+    }
+
+    /** @return BelongsTo<Label, $this> */
+    public function label(): BelongsTo
+    {
+        return $this->belongsTo(Label::class);
     }
 }

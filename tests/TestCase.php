@@ -24,6 +24,7 @@ abstract class TestCase extends OrchestraTestCase
         Schema::dropIfExists('comments');
         Schema::dropIfExists('posts');
         Schema::dropIfExists('tags');
+        Schema::dropIfExists('labels');
         Schema::dropIfExists('uuid_users');
         Schema::dropIfExists('users');
 
@@ -32,6 +33,8 @@ abstract class TestCase extends OrchestraTestCase
             $table->string('name');
             $table->string('email')->unique();
             $table->boolean('active')->default(true);
+            $table->integer('score')->nullable();
+            $table->text('bio')->nullable();
             $table->timestamps();
             $table->softDeletes();
         });
@@ -45,9 +48,17 @@ abstract class TestCase extends OrchestraTestCase
             $table->softDeletes();
         });
 
+        Schema::create('labels', function (Blueprint $table): void {
+            $table->id();
+            $table->string('name');
+            $table->timestamps();
+        });
+
         Schema::create('tags', function (Blueprint $table): void {
             $table->id();
             $table->string('name');
+            $table->smallInteger('priority')->default(0);
+            $table->string('color', 7)->nullable();
             $table->timestamps();
         });
 
@@ -55,8 +66,11 @@ abstract class TestCase extends OrchestraTestCase
             $table->id();
             $table->foreignId('user_id')->constrained();
             $table->foreignId('tag_id')->nullable()->constrained();
+            $table->foreignId('label_id')->nullable()->constrained();
             $table->string('title');
             $table->boolean('published')->default(false);
+            $table->unsignedBigInteger('view_count')->default(0);
+            $table->decimal('rating', 4, 1)->nullable();
             $table->timestamps();
         });
 
@@ -64,6 +78,7 @@ abstract class TestCase extends OrchestraTestCase
             $table->id();
             $table->morphs('commentable');
             $table->string('body');
+            $table->unsignedBigInteger('likes')->default(0);
             $table->timestamps();
         });
     }
@@ -74,6 +89,7 @@ abstract class TestCase extends OrchestraTestCase
         Schema::dropIfExists('comments');
         Schema::dropIfExists('posts');
         Schema::dropIfExists('tags');
+        Schema::dropIfExists('labels');
         Schema::dropIfExists('uuid_users');
         Schema::dropIfExists('users');
         DB::disconnect();

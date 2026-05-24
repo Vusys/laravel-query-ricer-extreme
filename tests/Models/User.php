@@ -19,6 +19,8 @@ use Vusys\QueryRicerExtreme\Tests\Factories\UserFactory;
  * @property string $name
  * @property string $email
  * @property bool $active
+ * @property int|null $score
+ * @property string|null $bio
  * @property Carbon|null $deleted_at
  */
 final class User extends Model
@@ -36,11 +38,12 @@ final class User extends Model
     }
 
     /** @var list<string> */
-    protected $fillable = ['name', 'email', 'active'];
+    protected $fillable = ['name', 'email', 'active', 'score', 'bio'];
 
     /** @var array<string, string> */
     protected $casts = [
         'active' => 'boolean',
+        'score' => 'integer',
     ];
 
     /** @return HasMany<Post, $this> */

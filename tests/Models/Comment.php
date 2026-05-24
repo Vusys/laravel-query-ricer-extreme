@@ -14,6 +14,7 @@ use Vusys\QueryRicerExtreme\Tests\Concerns\UsesContextConnection;
  * @property string $commentable_type
  * @property int $commentable_id
  * @property string $body
+ * @property int $likes
  */
 final class Comment extends Model
 {
@@ -21,7 +22,10 @@ final class Comment extends Model
     use UsesContextConnection;
 
     /** @var list<string> */
-    protected $fillable = ['commentable_type', 'commentable_id', 'body'];
+    protected $fillable = ['commentable_type', 'commentable_id', 'body', 'likes'];
+
+    /** @var array<string, string> */
+    protected $casts = ['likes' => 'integer'];
 
     /** @return MorphTo<Model, $this> */
     public function commentable(): MorphTo

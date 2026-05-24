@@ -92,6 +92,8 @@ abstract class DualDatabaseTestCase extends FuzzerTestCase
             $table->string('name');
             $table->string('email')->unique();
             $table->boolean('active')->default(true);
+            $table->integer('score')->nullable();
+            $table->text('bio')->nullable();
             $table->timestamps();
             $table->softDeletes();
         });
@@ -99,6 +101,8 @@ abstract class DualDatabaseTestCase extends FuzzerTestCase
         Schema::connection('test_b')->create('tags', function (Blueprint $table): void {
             $table->id();
             $table->string('name');
+            $table->smallInteger('priority')->default(0);
+            $table->string('color', 7)->nullable();
             $table->timestamps();
         });
 
@@ -106,8 +110,11 @@ abstract class DualDatabaseTestCase extends FuzzerTestCase
             $table->id();
             $table->unsignedBigInteger('user_id');
             $table->unsignedBigInteger('tag_id')->nullable();
+            $table->unsignedBigInteger('label_id')->nullable();
             $table->string('title');
             $table->boolean('published')->default(false);
+            $table->unsignedBigInteger('view_count')->default(0);
+            $table->decimal('rating', 4, 1)->nullable();
             $table->timestamps();
         });
 
@@ -115,6 +122,7 @@ abstract class DualDatabaseTestCase extends FuzzerTestCase
             $table->id();
             $table->morphs('commentable');
             $table->string('body');
+            $table->unsignedBigInteger('likes')->default(0);
             $table->timestamps();
         });
     }

@@ -21,6 +21,8 @@ final class UserFactory extends Factory
             'name' => fake()->name(),
             'email' => fake()->unique()->safeEmail(),
             'active' => true,
+            'score' => fake()->optional()->numberBetween(0, 100),
+            'bio' => fake()->optional()->sentence(),
         ];
     }
 

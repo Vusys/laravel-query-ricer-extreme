@@ -9,7 +9,7 @@ use PHPUnit\Framework\Attributes\Test;
 use Vusys\QueryRicerExtreme\Explanation;
 use Vusys\QueryRicerExtreme\Store\IdentityMapStore;
 use Vusys\QueryRicerExtreme\Tests\Models\Comment;
-use Vusys\QueryRicerExtreme\Tests\Models\Tag;
+use Vusys\QueryRicerExtreme\Tests\Models\Label;
 use Vusys\QueryRicerExtreme\Tests\Models\User;
 use Vusys\QueryRicerExtreme\Tests\TestCase;
 
@@ -142,10 +142,10 @@ final class MorphToMemoryTest extends TestCase
     #[Test]
     public function morph_to_falls_back_when_related_has_no_identity_map(): void
     {
-        $tag = Tag::create(['name' => 'php']);
+        $label = Label::create(['name' => 'php']);
         $comment = Comment::create([
-            'commentable_type' => Tag::class,
-            'commentable_id' => $tag->id,
+            'commentable_type' => Label::class,
+            'commentable_id' => $label->id,
             'body' => 'hello',
         ]);
 
@@ -158,22 +158,22 @@ final class MorphToMemoryTest extends TestCase
 
         $this->assertGreaterThan(0, $queryCount, 'morphTo should issue SQL when related model has no HasIdentityMap');
         $this->assertNotNull($result);
-        $this->assertInstanceOf(Tag::class, $result);
+        $this->assertInstanceOf(Label::class, $result);
     }
 
     #[Test]
     public function morph_to_falls_back_when_related_without_trait_is_in_store(): void
     {
-        // Tag lacks HasIdentityMap. Manually storing it must not cause morphTo to serve it
+        // Label lacks HasIdentityMap. Manually storing it must not cause morphTo to serve it
         // from memory — the !in_array(HasIdentityMap) guard must fire.
-        $tag = Tag::create(['name' => 'php']);
+        $label = Label::create(['name' => 'php']);
         $comment = Comment::create([
-            'commentable_type' => Tag::class,
-            'commentable_id' => $tag->id,
+            'commentable_type' => Label::class,
+            'commentable_id' => $label->id,
             'body' => 'hello',
         ]);
 
-        $this->store->remember($tag);
+        $this->store->remember($label);
 
         $queryCount = 0;
         DB::listen(function () use (&$queryCount): void {
@@ -183,7 +183,7 @@ final class MorphToMemoryTest extends TestCase
         $result = $comment->commentable;
 
         $this->assertGreaterThan(0, $queryCount, 'morphTo must fall back to SQL when related model lacks HasIdentityMap, even if the entry is in the store');
-        $this->assertInstanceOf(Tag::class, $result);
+        $this->assertInstanceOf(Label::class, $result);
     }
 
     #[Test]
