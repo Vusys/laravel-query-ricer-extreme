@@ -91,6 +91,8 @@ final class PredicateEvaluator
         foreach ($node->values as $value) {
             if ($value === null) {
                 $hasNullInList = true;
+
+                continue;
             }
 
             // phpcs:ignore SlevomatCodingStandard.Operators.DisallowEqualOperators
