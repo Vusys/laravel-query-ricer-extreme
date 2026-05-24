@@ -12,6 +12,7 @@ use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Vusys\QueryRicerExtreme\Coverage\CoverageRegistry;
+use Vusys\QueryRicerExtreme\Schema\SchemaDiscovery;
 use Vusys\QueryRicerExtreme\Store\IdentityMapStore;
 
 class QueryRicerExtremeServiceProvider extends ServiceProvider
@@ -23,6 +24,7 @@ class QueryRicerExtremeServiceProvider extends ServiceProvider
 
         $this->app->singleton(IdentityMapStore::class);
         $this->app->singleton(CoverageRegistry::class);
+        $this->app->singleton(SchemaDiscovery::class);
     }
 
     public function boot(): void
@@ -42,22 +44,26 @@ class QueryRicerExtremeServiceProvider extends ServiceProvider
             $this->app->terminating(function (): void {
                 $this->app->make(IdentityMapStore::class)->flush();
                 $this->app->make(CoverageRegistry::class)->flush();
+                $this->app->make(SchemaDiscovery::class)->flush();
             });
         }
 
         Event::listen(JobProcessing::class, function (): void {
             $this->app->make(IdentityMapStore::class)->flush();
             $this->app->make(CoverageRegistry::class)->flush();
+            $this->app->make(SchemaDiscovery::class)->flush();
         });
 
         Event::listen(JobProcessed::class, function (): void {
             $this->app->make(IdentityMapStore::class)->flush();
             $this->app->make(CoverageRegistry::class)->flush();
+            $this->app->make(SchemaDiscovery::class)->flush();
         });
 
         Event::listen(JobFailed::class, function (): void {
             $this->app->make(IdentityMapStore::class)->flush();
             $this->app->make(CoverageRegistry::class)->flush();
+            $this->app->make(SchemaDiscovery::class)->flush();
         });
 
         Event::listen(TransactionRolledBack::class, function (): void {

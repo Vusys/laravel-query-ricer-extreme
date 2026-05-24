@@ -40,6 +40,22 @@ return [
     ],
 
     /*
+     * Automatic discovery of unique indexes from the database schema. When enabled,
+     * the identity map inspects each model's table on first use and registers any
+     * unique indexes it finds — including compound indexes — so unique-key elision
+     * fires without requiring entries in 'models' above. Config-declared indexes
+     * take precedence; discovery supplements them, does not replace them.
+     *
+     *   enabled            — set false to disable schema introspection entirely.
+     *   cache_per_request  — reserved; discovery is currently always cached for the
+     *                        lifetime of the request/job scope.
+     */
+    'schema_discovery' => [
+        'enabled' => (bool) env('IDENTITY_MAP_SCHEMA_DISCOVERY', true),
+        'cache_per_request' => true,
+    ],
+
+    /*
      * Hard memory caps. Entries beyond these limits are not cached; the query falls
      * through to SQL. Tune downward in memory-constrained environments.
      */

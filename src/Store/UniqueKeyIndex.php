@@ -14,6 +14,12 @@ final class UniqueKeyIndex
     /** @var array<string, true> */
     private array $absent = [];
 
+    /** @var array<string, list<list<string>>> indexes registered at runtime (e.g. by schema discovery) */
+    private array $registered = [];
+
+    /** @var array<string, true> classes that have completed runtime discovery */
+    private array $discoveredClasses = [];
+
     public function index(IdentityEntry $entry, string $mapKey): void
     {
         foreach ($this->uniqueIndexesForModelClass($entry->modelClass) as $columns) {
@@ -61,6 +67,8 @@ final class UniqueKeyIndex
         if ($modelClass === null) {
             $this->index = [];
             $this->absent = [];
+            $this->registered = [];
+            $this->discoveredClasses = [];
 
             return;
         }
@@ -76,6 +84,8 @@ final class UniqueKeyIndex
                 unset($this->absent[$key]);
             }
         }
+
+        unset($this->registered[$modelClass], $this->discoveredClasses[$modelClass]);
     }
 
     /** @return list<list<string>> */
@@ -83,31 +93,89 @@ final class UniqueKeyIndex
     {
         $rawConfig = config("query-ricer-extreme.models.{$modelClass}.unique");
 
-        if (! is_array($rawConfig)) {
-            return [];
-        }
-
         $result = [];
+        $seen = [];
 
-        foreach ($rawConfig as $indexEntry) {
-            if (! is_array($indexEntry)) {
-                continue;
-            }
-
-            $columns = [];
-
-            foreach ($indexEntry as $col) {
-                if (is_string($col)) {
-                    $columns[] = $col;
+        if (is_array($rawConfig)) {
+            foreach ($rawConfig as $indexEntry) {
+                if (! is_array($indexEntry)) {
+                    continue;
                 }
-            }
 
-            if ($columns !== []) {
+                $columns = [];
+
+                foreach ($indexEntry as $col) {
+                    if (is_string($col)) {
+                        $columns[] = $col;
+                    }
+                }
+
+                if ($columns === []) {
+                    continue;
+                }
+
+                $key = $this->columnSetKey($columns);
+                if (isset($seen[$key])) {
+                    continue;
+                }
+                $seen[$key] = true;
                 $result[] = $columns;
             }
         }
 
+        foreach ($this->registered[$modelClass] ?? [] as $columns) {
+            $key = $this->columnSetKey($columns);
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $result[] = $columns;
+        }
+
         return $result;
+    }
+
+    /**
+     * Register a discovered unique-index column set for the given model class.
+     *
+     * @param  list<string>  $columns
+     */
+    public function register(string $modelClass, array $columns): void
+    {
+        if ($columns === []) {
+            return;
+        }
+
+        $existing = $this->registered[$modelClass] ?? [];
+        $key = $this->columnSetKey($columns);
+
+        foreach ($existing as $known) {
+            if ($this->columnSetKey($known) === $key) {
+                return;
+            }
+        }
+
+        $existing[] = $columns;
+        $this->registered[$modelClass] = $existing;
+    }
+
+    public function hasDiscovered(string $modelClass): bool
+    {
+        return isset($this->discoveredClasses[$modelClass]);
+    }
+
+    public function markDiscovered(string $modelClass): void
+    {
+        $this->discoveredClasses[$modelClass] = true;
+    }
+
+    /** @param list<string> $columns */
+    private function columnSetKey(array $columns): string
+    {
+        $sorted = $columns;
+        sort($sorted);
+
+        return implode("\0", $sorted);
     }
 
     /** @param array<string, mixed> $values already ksorted */

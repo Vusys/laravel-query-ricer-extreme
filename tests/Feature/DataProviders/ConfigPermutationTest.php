@@ -25,6 +25,10 @@ final class ConfigPermutationTest extends TestCase
         parent::setUp();
         $this->store = resolve(IdentityMapStore::class);
         $this->store->flush();
+        // These tests exercise unique-key config permutations in isolation; schema
+        // auto-discovery would supplement the config shape under test and obscure
+        // the assertions.
+        config(['query-ricer-extreme.schema_discovery.enabled' => false]);
     }
 
     // -------------------------------------------------------------------------

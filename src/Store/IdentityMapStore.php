@@ -18,6 +18,7 @@ use Vusys\QueryRicerExtreme\Knowledge\RelationKnowledge;
 use Vusys\QueryRicerExtreme\Predicate\PredicateEvaluator;
 use Vusys\QueryRicerExtreme\Predicate\PredicateNode;
 use Vusys\QueryRicerExtreme\Query\ScopeFingerprinter;
+use Vusys\QueryRicerExtreme\Schema\SchemaDiscovery;
 
 final class IdentityMapStore
 {
@@ -92,6 +93,7 @@ final class IdentityMapStore
         }
 
         unset($this->absent[$mapKey]);
+        $this->ensureDiscoveredFor($model::class);
         $this->uniqueKeyIndex->index($this->entries[$mapKey], $mapKey);
     }
 
@@ -129,6 +131,7 @@ final class IdentityMapStore
             $entry->version++;
             $entry->attributes->mergeFromSaved($model);
             $entry->attributes->allColumnsKnown = true;
+            $this->ensureDiscoveredFor($model::class);
             $this->uniqueKeyIndex->index($entry, $mapKey);
         } else {
             $this->remember($model, true);
@@ -300,6 +303,7 @@ final class IdentityMapStore
             $this->entries = [];
             $this->absent = [];
             $this->uniqueKeyIndex->flush();
+            resolve(SchemaDiscovery::class)->flush();
 
             return;
         }
@@ -518,6 +522,8 @@ final class IdentityMapStore
             return false;
         }
 
+        $this->ensureDiscoveredFor($modelClass);
+
         $keysToEvict = [];
 
         foreach ($this->entries as $mapKey => $entry) {
@@ -632,7 +638,28 @@ final class IdentityMapStore
     /** @return list<list<string>> */
     public function uniqueIndexesForModelClass(string $modelClass): array
     {
+        $this->ensureDiscoveredFor($modelClass);
+
         return $this->uniqueKeyIndex->uniqueIndexesForModelClass($modelClass);
+    }
+
+    private function ensureDiscoveredFor(string $modelClass): void
+    {
+        if ($this->uniqueKeyIndex->hasDiscovered($modelClass)) {
+            return;
+        }
+
+        if (! is_subclass_of($modelClass, Model::class)) {
+            $this->uniqueKeyIndex->markDiscovered($modelClass);
+
+            return;
+        }
+
+        foreach (resolve(SchemaDiscovery::class)->uniqueIndexesFor($modelClass) as $columns) {
+            $this->uniqueKeyIndex->register($modelClass, $columns);
+        }
+
+        $this->uniqueKeyIndex->markDiscovered($modelClass);
     }
 
     private function makeKey(Model $model, int|string $primaryKeyValue, string $fingerprint): string

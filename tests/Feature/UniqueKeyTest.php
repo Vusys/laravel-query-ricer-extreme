@@ -158,7 +158,11 @@ final class UniqueKeyTest extends TestCase
     #[Test]
     public function no_unique_key_config_falls_through_to_sql(): void
     {
-        config(['query-ricer-extreme.models' => []]);
+        config([
+            'query-ricer-extreme.models' => [],
+            'query-ricer-extreme.schema_discovery.enabled' => false,
+        ]);
+        $this->store->flush();
 
         $alice = $this->createFresh('Alice', 'alice@example.com');
         User::find($alice->id);
@@ -170,7 +174,7 @@ final class UniqueKeyTest extends TestCase
 
         $result = User::where('email', 'alice@example.com')->first();
 
-        $this->assertSame(1, $queryCount, 'No unique config must fall through to SQL');
+        $this->assertSame(1, $queryCount, 'No unique config and discovery disabled must fall through to SQL');
         $this->assertNotNull($result);
         $this->assertSame($alice->id, $result->id);
     }
@@ -1146,12 +1150,17 @@ final class UniqueKeyTest extends TestCase
         $alice = $this->createFresh('Alice', 'alice@example.com');
 
         // Provide a flat string instead of array-of-arrays — the non-array entry
-        // must be skipped without error, yielding no unique indexes
-        config(['query-ricer-extreme.models' => [
-            User::class => [
-                'unique' => ['email'],
+        // must be skipped without error, yielding no unique indexes. Disable
+        // schema discovery so we isolate the malformed-config behaviour.
+        config([
+            'query-ricer-extreme.models' => [
+                User::class => [
+                    'unique' => ['email'],
+                ],
             ],
-        ]]);
+            'query-ricer-extreme.schema_discovery.enabled' => false,
+        ]);
+        $this->store->flush();
 
         User::find($alice->id);
 
