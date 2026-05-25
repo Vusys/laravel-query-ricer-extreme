@@ -8,6 +8,7 @@ use Closure;
 use Illuminate\Support\Facades\DB;
 use PHPUnit\Framework\Attributes\Group;
 use Vusys\QueryRicerExtreme\IdentityMap;
+use Vusys\QueryRicerExtreme\Tests\Models\Post;
 use Vusys\QueryRicerExtreme\Tests\Models\User;
 
 #[Group('fuzzer')]
@@ -74,6 +75,51 @@ final class QuerySavingsTest extends FuzzerTestCase
 
             $this->assertSame(0, $with, 'Repeated absent finds must issue no SQL');
             $this->assertSame(count($absentIds), $oracle, 'Oracle must issue one SQL per absent lookup');
+        });
+    }
+
+    public function test_where_has_with_full_graph_coverage_fires_no_sql(): void
+    {
+        $this->eachSeed(function (int $seed, int $step): void {
+            IdentityMap::flush();
+
+            $userCount = mt_rand(1, 4);
+            /** @var list<User> $users */
+            $users = [];
+            for ($i = 0; $i < $userCount; $i++) {
+                $users[] = User::factory()->create();
+            }
+
+            foreach ($users as $u) {
+                for ($i = 0, $count = mt_rand(1, 3); $i < $count; $i++) {
+                    Post::create([
+                        'user_id' => $u->id,
+                        'title' => "p{$u->id}-{$i}",
+                        'published' => (bool) mt_rand(0, 1),
+                    ]);
+                }
+            }
+
+            foreach ($users as $u) {
+                $u->load('posts');
+            }
+
+            $ids = array_map(fn (User $u) => $u->id, $users);
+
+            $with = $this->countQueries(
+                fn () => User::whereKey($ids)
+                    ->whereHas('posts', fn ($q) => $q->where('published', true))
+                    ->get()
+            );
+
+            $oracle = $this->countQueries(fn (): mixed => IdentityMap::disabled(
+                fn () => User::whereKey($ids)
+                    ->whereHas('posts', fn ($q) => $q->where('published', true))
+                    ->get()
+            ));
+
+            $this->assertSame(0, $with, "whereHas with full coverage must issue no SQL [seed={$seed} step={$step}]");
+            $this->assertGreaterThan(0, $oracle, 'Oracle must issue SQL');
         });
     }
 

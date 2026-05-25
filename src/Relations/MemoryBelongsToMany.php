@@ -351,7 +351,7 @@ final class MemoryBelongsToMany extends BelongsToMany
         }
 
         $pivotEdges = $graph->pivotEdgesFrom($parentIdentity, $relationName);
-        $evaluator = new PredicateEvaluator;
+        $evaluator = PredicateEvaluator::forModel($this->related);
         $relatedPredicate = $relatedNodes === [] ? null : new AndNode($relatedNodes);
         $pivotPredicate = $pivotNodes === [] ? null : new AndNode($pivotNodes);
         $filtered = [];

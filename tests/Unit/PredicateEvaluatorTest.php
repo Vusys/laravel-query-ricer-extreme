@@ -91,22 +91,15 @@ final class PredicateEvaluatorTest extends TestCase
     }
 
     #[Test]
-    public function equality_matches_int_to_bool(): void
+    public function cross_type_int_bool_equality_unknown_under_conservative_default(): void
     {
-        // raw attribute is 1 (SQLite boolean), predicate value is true
+        // The default evaluator uses ConservativeSemantics, which refuses to
+        // coerce across types. Driver-aware profiles (Sqlite, MySql, …) handle
+        // tinyint↔bool coercion and are covered in their own driver tests.
         $attrs = $this->attributes(['active' => 1]);
         $node = new ComparisonNode('active', '=', true);
 
-        $this->assertSame(EvaluationResult::Match, $this->evaluator->evaluate($attrs, $node));
-    }
-
-    #[Test]
-    public function equality_rejects_int_zero_against_true(): void
-    {
-        $attrs = $this->attributes(['active' => 0]);
-        $node = new ComparisonNode('active', '=', true);
-
-        $this->assertSame(EvaluationResult::Reject, $this->evaluator->evaluate($attrs, $node));
+        $this->assertSame(EvaluationResult::Unknown, $this->evaluator->evaluate($attrs, $node));
     }
 
     #[Test]
@@ -197,6 +190,33 @@ final class PredicateEvaluatorTest extends TestCase
     {
         $attrs = $this->attributes(['name' => 'Alice']);
         $node = new InNode('status', ['active'], false);
+
+        $this->assertSame(EvaluationResult::Unknown, $this->evaluator->evaluate($attrs, $node));
+    }
+
+    #[Test]
+    public function in_unknown_when_column_value_is_null(): void
+    {
+        $attrs = $this->attributes(['status' => null]);
+        $node = new InNode('status', ['active'], false);
+
+        $this->assertSame(EvaluationResult::Unknown, $this->evaluator->evaluate($attrs, $node));
+    }
+
+    #[Test]
+    public function in_with_null_in_list_skips_null_and_matches_other_value(): void
+    {
+        $attrs = $this->attributes(['status' => 'active']);
+        $node = new InNode('status', [null, 'active'], false);
+
+        $this->assertSame(EvaluationResult::Match, $this->evaluator->evaluate($attrs, $node));
+    }
+
+    #[Test]
+    public function in_with_null_in_list_returns_unknown_when_not_found(): void
+    {
+        $attrs = $this->attributes(['status' => 'unmatched']);
+        $node = new InNode('status', [null, 'active'], false);
 
         $this->assertSame(EvaluationResult::Unknown, $this->evaluator->evaluate($attrs, $node));
     }

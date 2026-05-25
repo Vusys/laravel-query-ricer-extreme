@@ -127,7 +127,7 @@ final class MemoryHasMany extends HasMany
         }
 
         $predicate = new AndNode($extraNodes);
-        $evaluator = new PredicateEvaluator;
+        $evaluator = PredicateEvaluator::forModel($this->related);
         /** @var list<TRelatedModel> $filteredModels */
         $filteredModels = [];
         $hasUnknown = false;
@@ -472,7 +472,7 @@ final class MemoryHasMany extends HasMany
         }
 
         $predicate = new AndNode($extraNodes);
-        $evaluator = new PredicateEvaluator;
+        $evaluator = PredicateEvaluator::forModel($this->related);
         $filtered = [];
 
         foreach ($children as $child) {

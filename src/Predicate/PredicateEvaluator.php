@@ -4,12 +4,65 @@ declare(strict_types=1);
 
 namespace Vusys\QueryRicerExtreme\Predicate;
 
+use Illuminate\Database\Eloquent\Model;
+use Vusys\QueryRicerExtreme\Driver\ColumnSemantics;
+use Vusys\QueryRicerExtreme\Driver\ColumnSemanticsResolver;
+use Vusys\QueryRicerExtreme\Driver\ConservativeSemantics;
+use Vusys\QueryRicerExtreme\Driver\DriverSemantics;
+use Vusys\QueryRicerExtreme\Driver\DriverSemanticsResolver;
+use Vusys\QueryRicerExtreme\Driver\NullColumnSemanticsResolver;
 use Vusys\QueryRicerExtreme\Enums\EvaluationResult;
 use Vusys\QueryRicerExtreme\Knowledge\AttributeFact;
 use Vusys\QueryRicerExtreme\Knowledge\AttributeKnowledge;
 
-final class PredicateEvaluator
+final readonly class PredicateEvaluator
 {
+    private DriverSemantics $semantics;
+
+    private ColumnSemanticsResolver $columns;
+
+    public function __construct(
+        ?DriverSemantics $semantics = null,
+        ?ColumnSemanticsResolver $columns = null,
+        /**
+         * Model instance used to resolve per-column semantics on the correct
+         * connection. When null, every column resolves to ColumnSemantics::unknown().
+         */
+        private ?Model $model = null,
+    ) {
+        $this->semantics = $semantics ?? new ConservativeSemantics;
+        $this->columns = $columns ?? new NullColumnSemanticsResolver;
+    }
+
+    /**
+     * Build an evaluator wired to the given model's connection-aware driver
+     * semantics and schema-discovered column metadata. Service container is
+     * consulted; falls back to a plain evaluator when the package services
+     * are not registered (e.g. in pure-unit-test contexts).
+     */
+    public static function forModel(Model $model): self
+    {
+        $app = function_exists('app') ? app() : null;
+
+        if ($app === null
+            || ! $app->bound(DriverSemanticsResolver::class)
+            || ! $app->bound(ColumnSemanticsResolver::class)
+        ) {
+            return new self;
+        }
+
+        /** @var DriverSemanticsResolver $resolver */
+        $resolver = $app->make(DriverSemanticsResolver::class);
+        /** @var ColumnSemanticsResolver $columns */
+        $columns = $app->make(ColumnSemanticsResolver::class);
+
+        return new self(
+            semantics: $resolver->forConnection($model->getConnection()),
+            columns: $columns,
+            model: $model,
+        );
+    }
+
     public function evaluate(AttributeKnowledge $attributes, PredicateNode $node, bool $processTruth = false): EvaluationResult
     {
         return match (true) {
@@ -60,31 +113,14 @@ final class PredicateEvaluator
             return EvaluationResult::Unknown;
         }
 
-        // phpcs:ignore SlevomatCodingStandard.Operators.DisallowEqualOperators
         return match ($node->operator) {
-            '=' => $attrValue == $predicateValue
-                ? EvaluationResult::Match
-                : EvaluationResult::Reject,
-            '!=', '<>' => $attrValue != $predicateValue
-                ? EvaluationResult::Match
-                : EvaluationResult::Reject,
-            '>', '>=', '<', '<=' => $this->evaluateNumericComparison($attrValue, $node->operator, $predicateValue),
+            '=', '!=', '<>', '>', '>=', '<', '<=' => $this->semantics->compare(
+                $attrValue,
+                $node->operator,
+                $predicateValue,
+                $this->columnSemantics($node->column),
+            ),
             default => EvaluationResult::Unknown,
-        };
-    }
-
-    /** @param '>'|'>='|'<'|'<=' $op */
-    private function evaluateNumericComparison(mixed $a, string $op, mixed $b): EvaluationResult
-    {
-        if (! is_int($a) && ! is_float($a) || ! is_int($b) && ! is_float($b)) {
-            return EvaluationResult::Unknown;
-        }
-
-        return match ($op) {
-            '>' => $a > $b ? EvaluationResult::Match : EvaluationResult::Reject,
-            '>=' => $a >= $b ? EvaluationResult::Match : EvaluationResult::Reject,
-            '<' => $a < $b ? EvaluationResult::Match : EvaluationResult::Reject,
-            '<=' => $a <= $b ? EvaluationResult::Match : EvaluationResult::Reject,
         };
     }
 
@@ -102,7 +138,9 @@ final class PredicateEvaluator
             return EvaluationResult::Unknown;
         }
 
+        $column = $this->columnSemantics($node->column);
         $found = false;
+        $hasUnknown = false;
         $hasNullInList = false;
 
         foreach ($node->values as $value) {
@@ -112,14 +150,19 @@ final class PredicateEvaluator
                 continue;
             }
 
-            // phpcs:ignore SlevomatCodingStandard.Operators.DisallowEqualOperators
-            if ($attrValue == $value) {
+            $result = $this->semantics->compare($attrValue, '=', $value, $column);
+
+            if ($result === EvaluationResult::Match) {
                 $found = true;
                 break;
             }
+
+            if ($result === EvaluationResult::Unknown) {
+                $hasUnknown = true;
+            }
         }
 
-        if (! $found && $hasNullInList) {
+        if (! $found && ($hasNullInList || $hasUnknown)) {
             return EvaluationResult::Unknown;
         }
 
@@ -160,18 +203,36 @@ final class PredicateEvaluator
 
         $v = $processTruth ? $fact->currentValue : $fact->originalValue;
 
-        if (! is_int($v) && ! is_float($v)
-            || ! is_int($node->min) && ! is_float($node->min)
-            || ! is_int($node->max) && ! is_float($node->max)
-        ) {
+        if ($v === null) {
             return EvaluationResult::Unknown;
         }
 
-        $inRange = $v >= $node->min && $v <= $node->max;
+        $column = $this->columnSemantics($node->column);
+        $lower = $this->semantics->compare($v, '>=', $node->min, $column);
+        $upper = $this->semantics->compare($v, '<=', $node->max, $column);
+
+        $inRange = match (true) {
+            $lower === EvaluationResult::Match && $upper === EvaluationResult::Match => true,
+            $lower === EvaluationResult::Reject || $upper === EvaluationResult::Reject => false,
+            default => null,
+        };
+
+        if ($inRange === null) {
+            return EvaluationResult::Unknown;
+        }
 
         return match ($node->negated) {
             true => $inRange ? EvaluationResult::Reject : EvaluationResult::Match,
             false => $inRange ? EvaluationResult::Match : EvaluationResult::Reject,
         };
+    }
+
+    private function columnSemantics(string $column): ColumnSemantics
+    {
+        if (! $this->model instanceof Model) {
+            return ColumnSemantics::unknown();
+        }
+
+        return $this->columns->for($this->model, $column);
     }
 }

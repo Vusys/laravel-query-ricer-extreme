@@ -4,14 +4,21 @@ declare(strict_types=1);
 
 namespace Vusys\QueryRicerExtreme\Query;
 
+use Closure;
 use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Contracts\Support\Arrayable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Eloquent\Relations\MorphMany;
+use Illuminate\Database\Eloquent\Relations\MorphOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\MultipleRecordsFoundException;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Collection as SupportCollection;
 use Vusys\QueryRicerExtreme\Coverage\ColumnSet;
 use Vusys\QueryRicerExtreme\Coverage\CoverageEntry;
@@ -21,8 +28,11 @@ use Vusys\QueryRicerExtreme\Enums\LifecycleState;
 use Vusys\QueryRicerExtreme\Enums\PlanType;
 use Vusys\QueryRicerExtreme\Explanation;
 use Vusys\QueryRicerExtreme\Graph\IdentityGraph;
+use Vusys\QueryRicerExtreme\Graph\ModelIdentity;
+use Vusys\QueryRicerExtreme\Graph\RelationCoverage;
 use Vusys\QueryRicerExtreme\Predicate\AndNode;
 use Vusys\QueryRicerExtreme\Predicate\PredicateEvaluator;
+use Vusys\QueryRicerExtreme\Predicate\PredicateExtractor;
 use Vusys\QueryRicerExtreme\Predicate\PredicateNode;
 use Vusys\QueryRicerExtreme\Store\IdentityEntry;
 use Vusys\QueryRicerExtreme\Store\IdentityMapStore;
@@ -36,12 +46,186 @@ class IdentityMapBuilder extends Builder
 {
     private bool $identityMapDisabled = false;
 
+    /** @var list<PendingHasRewrite> */
+    private array $pendingHasRewrites = [];
+
     public function withoutIdentityMap(): static
     {
         $clone = clone $this;
         $clone->identityMapDisabled = true;
 
         return $clone;
+    }
+
+    #[\Override]
+    public function whereHas($relation, ?Closure $callback = null, $operator = '>=', $count = 1)
+    {
+        if (! is_string($relation) || str_contains($relation, '.') || $operator !== '>=' || $count !== 1) {
+            return parent::whereHas($relation, $callback, $operator, $count);
+        }
+
+        $before = count($this->getQuery()->wheres);
+        $result = parent::whereHas($relation, $callback, $operator, $count);
+        $this->maybeRecordHasRewrite($relation, false, $before);
+
+        return $result;
+    }
+
+    #[\Override]
+    public function whereDoesntHave($relation, ?Closure $callback = null)
+    {
+        if (! is_string($relation) || str_contains($relation, '.')) {
+            return parent::whereDoesntHave($relation, $callback);
+        }
+
+        $before = count($this->getQuery()->wheres);
+        $result = parent::whereDoesntHave($relation, $callback);
+        $this->maybeRecordHasRewrite($relation, true, $before);
+
+        return $result;
+    }
+
+    #[\Override]
+    public function __clone()
+    {
+        parent::__clone();
+        // pendingHasRewrites is a list of value objects — shallow copy is fine.
+        // We keep the rewrites so cloned builders (e.g. via withoutIdentityMap) still
+        // know which `wheres` indexes came from whereHas, preserving SQL fallthrough.
+    }
+
+    private function maybeRecordHasRewrite(string $relation, bool $not, int $beforeOffset): void
+    {
+        $wheres = $this->getQuery()->wheres;
+
+        if (count($wheres) !== $beforeOffset + 1) {
+            return;
+        }
+
+        $where = $wheres[$beforeOffset];
+        $expectedType = $not ? 'NotExists' : 'Exists';
+
+        if (($where['type'] ?? null) !== $expectedType || ($where['boolean'] ?? null) !== 'and') {
+            return;
+        }
+
+        $subQuery = $where['query'] ?? null;
+
+        if (! $subQuery instanceof QueryBuilder) {
+            return;
+        }
+
+        $model = $this->getModel();
+
+        if (! method_exists($model, $relation)) {
+            return;
+        }
+
+        $relationObj = $model->{$relation}();
+
+        if (! is_object($relationObj) || ! method_exists($relationObj, 'getRelated')) {
+            return;
+        }
+
+        $related = $relationObj->getRelated();
+
+        if (! $related instanceof Model) {
+            return;
+        }
+
+        $innerPredicate = $this->extractInnerPredicateFromSubquery($subQuery, $related);
+
+        if (! $innerPredicate instanceof PredicateNode) {
+            return;
+        }
+
+        $this->pendingHasRewrites[] = new PendingHasRewrite(
+            relation: $relation,
+            not: $not,
+            innerPredicate: $innerPredicate,
+            whereOffset: $beforeOffset,
+        );
+    }
+
+    private function extractInnerPredicateFromSubquery(QueryBuilder $subQuery, Model $related): ?PredicateNode
+    {
+        /** @var array<int, array<string, mixed>> $wheres */
+        $wheres = $subQuery->wheres;
+        $nodes = [];
+
+        $tablePrefix = $related->getTable().'.';
+        $deletedAt = method_exists($related, 'getDeletedAtColumn')
+            ? $related->getDeletedAtColumn()
+            : 'deleted_at';
+        $qualifiedDeletedAt = method_exists($related, 'getQualifiedDeletedAtColumn')
+            ? $related->getQualifiedDeletedAtColumn()
+            : $related->getTable().'.'.$deletedAt;
+
+        foreach ($wheres as $where) {
+            $type = $where['type'] ?? null;
+            $column = $where['column'] ?? null;
+            $boolean = $where['boolean'] ?? null;
+
+            // Column-to-column compares are the relation constraint (e.g. posts.user_id = users.id).
+            // The relation graph already encodes that linkage, so skip them.
+            if ($type === 'Column') {
+                continue;
+            }
+
+            // Soft-delete global scope on the related model; the per-model fingerprint
+            // already covers default-scope rows, and the column is often absent from
+            // the stored attribute facts.
+            if ($type === 'Null'
+                && $boolean === 'and'
+                && is_string($column)
+                && in_array($column, [$deletedAt, $qualifiedDeletedAt], true)
+            ) {
+                continue;
+            }
+
+            if ($boolean !== 'and') {
+                return null;
+            }
+
+            // Stored attribute facts use unqualified column names — normalize before
+            // handing off to PredicateExtractor.
+            if (is_string($column) && str_starts_with($column, $tablePrefix)) {
+                $where = ['column' => substr($column, strlen($tablePrefix))] + $where;
+            }
+
+            $node = PredicateExtractor::fromWhere($where);
+
+            if (! $node instanceof PredicateNode) {
+                return null;
+            }
+
+            $nodes[] = $node;
+        }
+
+        if ($nodes === []) {
+            return new AndNode([]);
+        }
+
+        if (count($nodes) === 1) {
+            return $nodes[0];
+        }
+
+        return new AndNode($nodes);
+    }
+
+    /** @return list<int> */
+    private function pendingHasRewriteOffsets(): array
+    {
+        return array_map(static fn (PendingHasRewrite $r): int => $r->whereOffset, $this->pendingHasRewrites);
+    }
+
+    /** @return QueryPatternExtractor<TModel> */
+    private function makeExtractor(): QueryPatternExtractor
+    {
+        /** @var QueryPatternExtractor<TModel> $extractor */
+        $extractor = new QueryPatternExtractor($this, $this->pendingHasRewriteOffsets());
+
+        return $extractor;
     }
 
     /**
@@ -181,7 +365,7 @@ class IdentityMapBuilder extends Builder
 
         $connection = $this->getModel()->getConnection()->getName() ?? 'default';
         $fingerprint = ScopeFingerprinter::fromBuilder($this);
-        $extractor = new QueryPatternExtractor($this);
+        $extractor = $this->makeExtractor();
 
         // --- single primary-key lookup ---
         $primaryKeyId = $extractor->extractSinglePrimaryKeyLookup();
@@ -197,18 +381,38 @@ class IdentityMapBuilder extends Builder
             );
 
             if ($entry !== null && $entry->state === LifecycleState::Exists && $entry->attributes->satisfies($columns)) {
-                $store->capture(new Explanation(
-                    type: PlanType::ReturnCollectionFromMemory,
-                    modelClass: $model::class,
-                    reason: 'exact-primary-key-hit-via-where',
-                    sqlExecuted: false,
-                    memoryKeys: [$primaryKeyId],
-                ));
+                $hasResult = $this->pendingHasRewrites === []
+                    ? EvaluationResult::Match
+                    : $this->evaluateHasRewrites($entry->model, $store, resolve(IdentityGraph::class));
 
-                /** @var TModel $cached */
-                $cached = $entry->model;
+                if ($hasResult === EvaluationResult::Match) {
+                    $store->capture(new Explanation(
+                        type: $this->pendingHasRewrites === []
+                            ? PlanType::ReturnCollectionFromMemory
+                            : $this->coveragePlanType(PlanType::ReturnCollectionFromMemory),
+                        modelClass: $model::class,
+                        reason: 'exact-primary-key-hit-via-where',
+                        sqlExecuted: false,
+                        memoryKeys: [$primaryKeyId],
+                    ));
 
-                return [$cached];
+                    /** @var TModel $cached */
+                    $cached = $entry->model;
+
+                    return [$cached];
+                }
+
+                if ($hasResult === EvaluationResult::Reject) {
+                    $store->capture(new Explanation(
+                        type: $this->coveragePlanType(PlanType::ReturnEmptyCollection),
+                        modelClass: $model::class,
+                        reason: 'where-has-filter-rejected',
+                        sqlExecuted: false,
+                    ));
+
+                    return [];
+                }
+                // Unknown → fall through to SQL.
             }
 
             if ($store->isAbsent(
@@ -250,18 +454,28 @@ class IdentityMapBuilder extends Builder
             $memoryKeys = [];
             $rejectedKeys = [];
             $sqlKeys = $unknownKeys;
+            $hasExtraNodes = $extraPredicateNodes !== [];
+            $hasRewrites = $this->pendingHasRewrites !== [];
 
-            if ($extraPredicateNodes !== []) {
-                $evaluator = new PredicateEvaluator;
-                $predicate = new AndNode($extraPredicateNodes);
+            if ($hasExtraNodes || $hasRewrites) {
+                $evaluator = PredicateEvaluator::forModel($model);
+                $predicate = $hasExtraNodes ? new AndNode($extraPredicateNodes) : null;
                 $processTruth = $this->isProcessTruth();
+                $graph = resolve(IdentityGraph::class);
 
                 foreach ($hits as $hitKey => $hitEntry) {
                     if ($processTruth) {
                         $hitEntry->attributes->syncFromModel($hitEntry->model);
                     }
 
-                    $result = $evaluator->evaluate($hitEntry->attributes, $predicate, $processTruth);
+                    $result = $predicate instanceof AndNode
+                        ? $evaluator->evaluate($hitEntry->attributes, $predicate, $processTruth)
+                        : EvaluationResult::Match;
+
+                    if ($result !== EvaluationResult::Reject && $hasRewrites) {
+                        $hasResult = $this->evaluateHasRewrites($hitEntry->model, $store, $graph);
+                        $result = $this->combineEvaluations($result, $hasResult);
+                    }
 
                     if ($result === EvaluationResult::Match) {
                         /** @var TModel $hitModel */
@@ -284,14 +498,13 @@ class IdentityMapBuilder extends Builder
             }
 
             if ($sqlKeys === []) {
-                $planType = $extraPredicateNodes !== []
-                    ? PlanType::RewritePredicateAndMerge
-                    : PlanType::ReturnCollectionFromMemory;
+                $planType = $this->keySetPlanType($hasRewrites, $hasExtraNodes, sqlPath: false);
+                $reason = $this->keySetReason($hasRewrites, $hasExtraNodes, sqlPath: false);
 
                 $store->capture(new Explanation(
                     type: $planType,
                     modelClass: $model::class,
-                    reason: $extraPredicateNodes !== [] ? 'predicate-pruned-all-known' : 'all-keys-known-or-absent',
+                    reason: $reason,
                     sqlExecuted: false,
                     memoryKeys: $memoryKeys,
                     rejectedKeys: $rejectedKeys,
@@ -329,27 +542,30 @@ class IdentityMapBuilder extends Builder
                 }
             }
 
-            foreach ($unknownKeys as $unknownKey) {
-                if (! isset($fetchedByKey[$unknownKey])) {
-                    $store->recordAbsent(
-                        connection: $connection,
-                        modelClass: $model::class,
-                        table: $model->getTable(),
-                        primaryKeyName: $model->getKeyName(),
-                        primaryKeyValue: $unknownKey,
-                        fingerprint: $fingerprint,
-                    );
+            // With has-rewrites in play a missing fetched key can mean
+            // "whereHas EXISTS filtered it out" rather than "row absent".
+            if (! $hasRewrites) {
+                foreach ($unknownKeys as $unknownKey) {
+                    if (! isset($fetchedByKey[$unknownKey])) {
+                        $store->recordAbsent(
+                            connection: $connection,
+                            modelClass: $model::class,
+                            table: $model->getTable(),
+                            primaryKeyName: $model->getKeyName(),
+                            primaryKeyValue: $unknownKey,
+                            fingerprint: $fingerprint,
+                        );
+                    }
                 }
             }
 
-            $planType = $extraPredicateNodes !== []
-                ? PlanType::RewritePredicateAndMerge
-                : PlanType::RewritePrimaryKeysAndMerge;
+            $planType = $this->keySetPlanType($hasRewrites, $hasExtraNodes, sqlPath: true);
+            $reason = $this->keySetReason($hasRewrites, $hasExtraNodes, sqlPath: true);
 
             $store->capture(new Explanation(
                 type: $planType,
                 modelClass: $model::class,
-                reason: $extraPredicateNodes !== [] ? 'predicate-prune-and-rewrite' : 'key-set-rewrite',
+                reason: $reason,
                 sqlExecuted: true,
                 knownKeys: $memoryKeys,
                 missingKeys: $sqlKeys,
@@ -382,39 +598,32 @@ class IdentityMapBuilder extends Builder
             $uniqueEntry = $this->revalidateUniqueEntry($uniqueEntry, $processTruth);
 
             if ($uniqueEntry instanceof IdentityEntry && $uniqueEntry->state === LifecycleState::Exists && $uniqueEntry->attributes->satisfies($columns)) {
+                $evalResult = EvaluationResult::Match;
+
                 if ($extraNodes !== []) {
-                    $evaluator = new PredicateEvaluator;
+                    $evaluator = PredicateEvaluator::forModel($model);
                     $evalResult = $evaluator->evaluate($uniqueEntry->attributes, new AndNode($extraNodes), $processTruth);
+                }
 
-                    if ($evalResult === EvaluationResult::Reject) {
-                        $store->capture(new Explanation(
-                            type: PlanType::ReturnEmptyCollection,
-                            modelClass: $model::class,
-                            reason: 'unique-key-hit-predicate-rejected',
-                            sqlExecuted: false,
-                        ));
+                if ($evalResult !== EvaluationResult::Reject && $this->pendingHasRewrites !== []) {
+                    $hasResult = $this->evaluateHasRewrites($uniqueEntry->model, $store, resolve(IdentityGraph::class));
+                    $evalResult = $this->combineEvaluations($evalResult, $hasResult);
+                }
 
-                        return [];
-                    }
-
-                    if ($evalResult === EvaluationResult::Match) {
-                        $store->capture(new Explanation(
-                            type: PlanType::ReturnCollectionFromMemory,
-                            modelClass: $model::class,
-                            reason: 'unique-key-positive-hit',
-                            sqlExecuted: false,
-                            memoryKeys: [$uniqueEntry->primaryKeyValue],
-                        ));
-
-                        /** @var TModel $cached */
-                        $cached = $uniqueEntry->model;
-
-                        return [$cached];
-                    }
-                    // Unknown → fall through to SQL below
-                } else {
+                if ($evalResult === EvaluationResult::Reject) {
                     $store->capture(new Explanation(
-                        type: PlanType::ReturnCollectionFromMemory,
+                        type: $this->coveragePlanType(PlanType::ReturnEmptyCollection),
+                        modelClass: $model::class,
+                        reason: $this->pendingHasRewrites !== [] ? 'where-has-filter-rejected' : 'unique-key-hit-predicate-rejected',
+                        sqlExecuted: false,
+                    ));
+
+                    return [];
+                }
+
+                if ($evalResult === EvaluationResult::Match) {
+                    $store->capture(new Explanation(
+                        type: $this->coveragePlanType(PlanType::ReturnCollectionFromMemory),
                         modelClass: $model::class,
                         reason: 'unique-key-positive-hit',
                         sqlExecuted: false,
@@ -426,6 +635,7 @@ class IdentityMapBuilder extends Builder
 
                     return [$cached];
                 }
+                // Unknown → fall through to SQL below
             }
 
             if ($extraNodes === [] && ! $processTruth && $store->isAbsentByUniqueKey(
@@ -478,7 +688,7 @@ class IdentityMapBuilder extends Builder
 
         if ($coveredModels !== null) {
             $store->capture(new Explanation(
-                type: PlanType::ReturnCollectionFromCoverage,
+                type: $this->coveragePlanType(PlanType::ReturnCollectionFromCoverage),
                 modelClass: $model::class,
                 reason: 'coverage-subset-hit',
                 sqlExecuted: false,
@@ -532,8 +742,15 @@ class IdentityMapBuilder extends Builder
             return parent::exists();
         }
 
+        // The unique-key / coverage shortcuts below don't evaluate whereHas in
+        // memory; defer to SQL (which still applies the EXISTS) until exists()
+        // is wired through the has-rewrite evaluator.
+        if ($this->pendingHasRewrites !== []) {
+            return parent::exists();
+        }
+
         $uniqueIndexes = $store->uniqueIndexesForModelClass($this->getModel()::class);
-        $extractor = new QueryPatternExtractor($this);
+        $extractor = $this->makeExtractor();
         $uniqueExtraction = $extractor->extractUniqueKeyLookup($uniqueIndexes);
 
         if ($uniqueExtraction === null) {
@@ -561,7 +778,7 @@ class IdentityMapBuilder extends Builder
 
         if ($entry instanceof IdentityEntry && $entry->state === LifecycleState::Exists) {
             if ($extraNodes !== []) {
-                $evaluator = new PredicateEvaluator;
+                $evaluator = PredicateEvaluator::forModel($model);
                 $evalResult = $evaluator->evaluate($entry->attributes, new AndNode($extraNodes), $processTruth);
 
                 if ($evalResult === EvaluationResult::Reject) {
@@ -651,7 +868,7 @@ class IdentityMapBuilder extends Builder
         $model = $this->getModel();
         $connection = $model->getConnection()->getName() ?? 'default';
         $fingerprint = ScopeFingerprinter::fromBuilder($this);
-        $extractor = new QueryPatternExtractor($this);
+        $extractor = $this->makeExtractor();
 
         // For count(*) we don't need output columns, pass [] to skip satisfies check.
         $coveredModels = $this->getModelsFromCoverage([], $store, $connection, $fingerprint, $extractor);
@@ -687,7 +904,7 @@ class IdentityMapBuilder extends Builder
         $model = $this->getModel();
         $connection = $model->getConnection()->getName() ?? 'default';
         $fingerprint = ScopeFingerprinter::fromBuilder($this);
-        $extractor = new QueryPatternExtractor($this);
+        $extractor = $this->makeExtractor();
 
         $coveredModels = $this->getModelsFromCoverage([$column], $store, $connection, $fingerprint, $extractor);
 
@@ -734,7 +951,7 @@ class IdentityMapBuilder extends Builder
         $model = $this->getModel();
         $connection = $model->getConnection()->getName() ?? 'default';
         $fingerprint = ScopeFingerprinter::fromBuilder($this);
-        $extractor = new QueryPatternExtractor($this);
+        $extractor = $this->makeExtractor();
 
         $coveredModels = $this->getModelsFromCoverage([$column], $store, $connection, $fingerprint, $extractor);
 
@@ -792,7 +1009,7 @@ class IdentityMapBuilder extends Builder
         $model = $this->getModel();
         $connection = $model->getConnection()->getName() ?? 'default';
         $fingerprint = ScopeFingerprinter::fromBuilder($this);
-        $extractor = new QueryPatternExtractor($this);
+        $extractor = $this->makeExtractor();
 
         $coveredModels = $this->getModelsFromCoverage([$column], $store, $connection, $fingerprint, $extractor);
 
@@ -850,7 +1067,7 @@ class IdentityMapBuilder extends Builder
         $model = $this->getModel();
         $connection = $model->getConnection()->getName() ?? 'default';
         $fingerprint = ScopeFingerprinter::fromBuilder($this);
-        $extractor = new QueryPatternExtractor($this);
+        $extractor = $this->makeExtractor();
 
         $coveredModels = $this->getModelsFromCoverage([$column], $store, $connection, $fingerprint, $extractor);
 
@@ -921,7 +1138,7 @@ class IdentityMapBuilder extends Builder
         $model = $this->getModel();
         $connection = $model->getConnection()->getName() ?? 'default';
         $fingerprint = ScopeFingerprinter::fromBuilder($this);
-        $extractor = new QueryPatternExtractor($this);
+        $extractor = $this->makeExtractor();
 
         $neededColumns = is_string($key) ? [$column, $key] : [$column];
 
@@ -964,7 +1181,7 @@ class IdentityMapBuilder extends Builder
         $model = $this->getModel();
         $connection = $model->getConnection()->getName() ?? 'default';
         $fingerprint = ScopeFingerprinter::fromBuilder($this);
-        $extractor = new QueryPatternExtractor($this);
+        $extractor = $this->makeExtractor();
 
         $resolvedColumns = is_array($columns) ? $columns : [$columns];
 
@@ -1020,7 +1237,7 @@ class IdentityMapBuilder extends Builder
         $model = $this->getModel();
         $connection = $model->getConnection()->getName() ?? 'default';
         $fingerprint = ScopeFingerprinter::fromBuilder($this);
-        $extractor = new QueryPatternExtractor($this);
+        $extractor = $this->makeExtractor();
 
         $resolvedColumns = is_array($columns) ? $columns : [$columns];
 
@@ -1065,7 +1282,7 @@ class IdentityMapBuilder extends Builder
         $result = parent::update($values);
 
         if ($predicate instanceof PredicateNode) {
-            $hadEvictions = $store->applyMassUpdate($modelClass, $predicate, $values, new PredicateEvaluator);
+            $hadEvictions = $store->applyMassUpdate($modelClass, $predicate, $values, PredicateEvaluator::forModel($this->getModel()));
             if ($hadEvictions) {
                 $registry->flushModelClass($modelClass);
             } else {
@@ -1097,7 +1314,7 @@ class IdentityMapBuilder extends Builder
         $result = parent::delete();
 
         if ($predicate instanceof PredicateNode) {
-            $store->applyMassDelete($modelClass, $predicate, new PredicateEvaluator, $usesSoftDeletes);
+            $store->applyMassDelete($modelClass, $predicate, PredicateEvaluator::forModel($this->getModel()), $usesSoftDeletes);
         } else {
             $store->flush($modelClass);
         }
@@ -1174,8 +1391,10 @@ class IdentityMapBuilder extends Builder
         }
 
         $pkName = $model->getKeyName();
-        $evaluator = new PredicateEvaluator;
+        $evaluator = PredicateEvaluator::forModel($model);
         $processTruth = $this->isProcessTruth();
+        $hasRewrites = $this->pendingHasRewrites !== [];
+        $graph = $hasRewrites ? resolve(IdentityGraph::class) : null;
         $result = [];
 
         foreach ($entry->primaryKeys as $pk) {
@@ -1199,11 +1418,25 @@ class IdentityMapBuilder extends Builder
                 return null;
             }
 
-            if ($evalResult === EvaluationResult::Match) {
-                /** @var TModel $typed */
-                $typed = $mapEntry->model;
-                $result[] = $typed;
+            if ($evalResult === EvaluationResult::Reject) {
+                continue;
             }
+
+            if ($hasRewrites && $graph !== null) {
+                $hasResult = $this->evaluateHasRewrites($mapEntry->model, $store, $graph);
+
+                if ($hasResult === EvaluationResult::Unknown) {
+                    return null;
+                }
+
+                if ($hasResult === EvaluationResult::Reject) {
+                    continue;
+                }
+            }
+
+            /** @var TModel $typed */
+            $typed = $mapEntry->model;
+            $result[] = $typed;
         }
 
         return $result;
@@ -1369,5 +1602,211 @@ class IdentityMapBuilder extends Builder
     private function isProcessTruth(): bool
     {
         return config('query-ricer-extreme.attribute_truth', 'database_only') === 'process_truth';
+    }
+
+    private function evaluateHasRewrites(Model $candidate, IdentityMapStore $store, IdentityGraph $graph): EvaluationResult
+    {
+        $candidateIdentity = ModelIdentity::fromModel($candidate);
+
+        if (! $candidateIdentity instanceof ModelIdentity) {
+            return EvaluationResult::Unknown;
+        }
+
+        foreach ($this->pendingHasRewrites as $rewrite) {
+            $existsResult = $this->evaluateSingleHasRewrite($candidate, $candidateIdentity, $rewrite, $store, $graph);
+
+            if ($existsResult === EvaluationResult::Unknown) {
+                return EvaluationResult::Unknown;
+            }
+
+            $expected = $rewrite->not ? EvaluationResult::Reject : EvaluationResult::Match;
+
+            if ($existsResult !== $expected) {
+                return EvaluationResult::Reject;
+            }
+        }
+
+        return EvaluationResult::Match;
+    }
+
+    private function evaluateSingleHasRewrite(
+        Model $candidate,
+        ModelIdentity $candidateIdentity,
+        PendingHasRewrite $rewrite,
+        IdentityMapStore $store,
+        IdentityGraph $graph,
+    ): EvaluationResult {
+        if (! method_exists($candidate, $rewrite->relation)) {
+            return EvaluationResult::Unknown;
+        }
+
+        $relation = $candidate->{$rewrite->relation}();
+        $evaluator = PredicateEvaluator::forModel($relation->getRelated());
+
+        if ($relation instanceof BelongsTo) {
+            return $this->evaluateBelongsToHas($candidate, $relation, $rewrite->innerPredicate, $store, $evaluator);
+        }
+
+        if ($relation instanceof HasMany || $relation instanceof HasOne
+            || $relation instanceof MorphMany || $relation instanceof MorphOne
+        ) {
+            return $this->evaluateChildrenHas($candidateIdentity, $rewrite, $relation->getRelated(), $store, $graph, $evaluator);
+        }
+
+        return EvaluationResult::Unknown;
+    }
+
+    /** @param BelongsTo<Model, Model> $relation */
+    private function evaluateBelongsToHas(
+        Model $candidate,
+        BelongsTo $relation,
+        PredicateNode $innerPredicate,
+        IdentityMapStore $store,
+        PredicateEvaluator $evaluator,
+    ): EvaluationResult {
+        $fkValue = $candidate->getAttribute($relation->getForeignKeyName());
+
+        if ($fkValue === null) {
+            return EvaluationResult::Reject;
+        }
+
+        if (! is_int($fkValue) && ! is_string($fkValue)) {
+            return EvaluationResult::Unknown;
+        }
+
+        $related = $relation->getRelated();
+
+        if ($relation->getOwnerKeyName() !== $related->getKeyName()) {
+            return EvaluationResult::Unknown;
+        }
+
+        $parentEntry = $store->find(
+            connection: $related->getConnectionName() ?? 'default',
+            modelClass: $related::class,
+            table: $related->getTable(),
+            primaryKeyName: $related->getKeyName(),
+            primaryKeyValue: $fkValue,
+            fingerprint: ScopeFingerprinter::fromModel($related),
+        );
+
+        if (! $parentEntry instanceof IdentityEntry) {
+            return EvaluationResult::Unknown;
+        }
+
+        if ($parentEntry->state !== LifecycleState::Exists) {
+            return EvaluationResult::Reject;
+        }
+
+        return $evaluator->evaluate($parentEntry->attributes, $innerPredicate);
+    }
+
+    private function evaluateChildrenHas(
+        ModelIdentity $parentIdentity,
+        PendingHasRewrite $rewrite,
+        Model $related,
+        IdentityMapStore $store,
+        IdentityGraph $graph,
+        PredicateEvaluator $evaluator,
+    ): EvaluationResult {
+        $coverage = $graph->coverageFor($parentIdentity, $rewrite->relation);
+
+        if (! $coverage instanceof RelationCoverage || ! $coverage->complete) {
+            return EvaluationResult::Unknown;
+        }
+
+        if ($coverage->childPrimaryKeys === []) {
+            return EvaluationResult::Reject;
+        }
+
+        $connection = $related->getConnectionName() ?? 'default';
+        $fingerprint = ScopeFingerprinter::fromModel($related);
+        $hasUnknown = false;
+
+        foreach ($coverage->childPrimaryKeys as $pk) {
+            $childEntry = $store->find(
+                connection: $connection,
+                modelClass: $related::class,
+                table: $related->getTable(),
+                primaryKeyName: $related->getKeyName(),
+                primaryKeyValue: $pk,
+                fingerprint: $fingerprint,
+            );
+
+            if (! $childEntry instanceof IdentityEntry || $childEntry->state !== LifecycleState::Exists) {
+                return EvaluationResult::Unknown;
+            }
+
+            $childResult = $evaluator->evaluate($childEntry->attributes, $rewrite->innerPredicate);
+
+            if ($childResult === EvaluationResult::Match) {
+                return EvaluationResult::Match;
+            }
+
+            if ($childResult === EvaluationResult::Unknown) {
+                $hasUnknown = true;
+            }
+        }
+
+        return $hasUnknown ? EvaluationResult::Unknown : EvaluationResult::Reject;
+    }
+
+    private function combineEvaluations(EvaluationResult $a, EvaluationResult $b): EvaluationResult
+    {
+        if ($a === EvaluationResult::Reject || $b === EvaluationResult::Reject) {
+            return EvaluationResult::Reject;
+        }
+
+        if ($a === EvaluationResult::Unknown || $b === EvaluationResult::Unknown) {
+            return EvaluationResult::Unknown;
+        }
+
+        return EvaluationResult::Match;
+    }
+
+    private function keySetPlanType(bool $hasRewrites, bool $hasExtraNodes, bool $sqlPath): PlanType
+    {
+        if ($hasRewrites) {
+            foreach ($this->pendingHasRewrites as $r) {
+                if ($r->not) {
+                    return PlanType::WhereDoesntHaveFromGraph;
+                }
+            }
+
+            return PlanType::WhereHasFromGraph;
+        }
+
+        if ($sqlPath) {
+            return $hasExtraNodes ? PlanType::RewritePredicateAndMerge : PlanType::RewritePrimaryKeysAndMerge;
+        }
+
+        return $hasExtraNodes ? PlanType::RewritePredicateAndMerge : PlanType::ReturnCollectionFromMemory;
+    }
+
+    private function keySetReason(bool $hasRewrites, bool $hasExtraNodes, bool $sqlPath): string
+    {
+        if ($hasRewrites) {
+            return $sqlPath ? 'has-rewrite-prune-and-rewrite' : 'has-rewrite-pruned-all-known';
+        }
+
+        if ($sqlPath) {
+            return $hasExtraNodes ? 'predicate-prune-and-rewrite' : 'key-set-rewrite';
+        }
+
+        return $hasExtraNodes ? 'predicate-pruned-all-known' : 'all-keys-known-or-absent';
+    }
+
+    private function coveragePlanType(PlanType $fallback): PlanType
+    {
+        if ($this->pendingHasRewrites === []) {
+            return $fallback;
+        }
+
+        foreach ($this->pendingHasRewrites as $r) {
+            if ($r->not) {
+                return PlanType::WhereDoesntHaveFromGraph;
+            }
+        }
+
+        return PlanType::WhereHasFromGraph;
     }
 }
