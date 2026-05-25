@@ -33,10 +33,13 @@ A scoped Eloquent identity map, process-truth engine, and query-elision planner 
   - [Attribute knowledge](#attribute-knowledge)
   - [Unique-key index](#unique-key-index)
   - [Coverage: CoverageRegistry and SubsetChecker](#coverage-coverageregistry-and-subsetchecker)
-  - [Modes](#modes)
+  - [Process-truth vs database-truth](#process-truth-vs-database-truth)
+  - [Identity graph](#identity-graph-relation_graph)
+  - [Partial models & column backfill](#partial-models--column-backfill-partial_models)
+  - [Schema discovery](#schema-discovery-schema_discovery)
+  - [Driver semantics](#driver-semantics-database_semantics)
   - [Lifecycle hooks and automatic flushing](#lifecycle-hooks-and-automatic-flushing)
   - [Mass writes](#mass-writes)
-  - [Memory limits](#memory-limits)
   - [Observability: explain()](#observability-explain)
 - [Test suite](#test-suite)
   - [Overview](#overview)
@@ -67,7 +70,7 @@ It is an **in-process identity map** scoped to a single request, queue job, or O
 
 It is not a distributed cache. It is not a query-result cache. Nothing is serialized, stored to Redis, or shared between processes. When the scope ends (the HTTP response is sent, the job finishes), all in-memory entries are discarded.
 
-It operates at the Eloquent Builder level — intercepting `find`, `get`, `first`, `sole`, `value`, `exists`, `count`, `pluck`, and relation resolution. Raw `DB::` queries and queries on models that do not use the `HasIdentityMap` trait are never touched.
+It operates at the Eloquent Builder level — overriding `find`, `getModels` (which powers `get`), `first`, `sole`, `exists`, `count`, `pluck`, `sum`, `min`, `max`, `avg`/`average`, `update`, `delete`, `forceDelete`, `whereHas`, and `whereDoesntHave`. `value()` and `firstOrFail()` are served indirectly through the overridden `first()`. Relation resolution is also intercepted (see [Relation optimizations](#relation-optimizations)). Raw `DB::` queries and queries on models that do not use the `HasIdentityMap` trait are never touched.
 
 The package goes further than the classic single-key identity map. It rewrites key-set queries so only genuinely unknown IDs hit the database, evaluates `WHERE` predicates against cached attributes to prune query results in memory, serves `where('email', ...)->first()` style lookups from a secondary unique-key index, and tracks entire query regions so broad `->get()` calls can prime the map for narrower follow-up queries.
 
@@ -262,17 +265,20 @@ The following are evaluated against cached attributes without touching the datab
 |---|---|
 | `where($col, $val)` / `where($col, '=', $val)` | `=` |
 | `where($col, '!=', $val)` / `where($col, '<>', $val)` | `!=`, `<>` |
+| `where($col, '>', $val)`, `>=`, `<`, `<=` | `>`, `>=`, `<`, `<=` |
 | `whereIn($col, [...])` | `IN` |
 | `whereNotIn($col, [...])` | `NOT IN` |
 | `whereNull($col)` | `IS NULL` |
 | `whereNotNull($col)` | `IS NOT NULL` |
+| `whereBetween($col, [$min, $max])` | `BETWEEN` |
+| `whereNotBetween($col, [$min, $max])` | `NOT BETWEEN` |
 | Multiple `where` chained with `AND` | AND-tree |
 
-Anything the package cannot evaluate in memory falls through to SQL unchanged — unsupported operators (`>`, `<`, `LIKE`, `BETWEEN`), raw `whereRaw` clauses, `orWhere` conditions, and attributes not present on a partially loaded model. See [Predicate evaluation](#predicate-evaluation) for how the engine decides.
+Anything the package cannot evaluate in memory falls through to SQL unchanged — unsupported operators (`LIKE`, `ILIKE`), raw `whereRaw` clauses, `orWhere` conditions, and attributes not present on a partially loaded model. String comparisons may also resolve to `Unknown` (and fall through) depending on the configured [driver semantics](#driver-semantics-database_semantics). See [Predicate evaluation](#predicate-evaluation) for how the engine decides.
 
 ### Relation optimizations
 
-When `HasIdentityMap` is applied, four relation types gain memory-backed implementations. They fall back to SQL transparently on any condition the package cannot safely evaluate in memory.
+When `HasIdentityMap` is applied, five relation types gain memory-backed implementations. They fall back to SQL transparently on any condition the package cannot safely evaluate in memory.
 
 **`belongsTo` / `morphTo`** — resolved without SQL when the related model is already in the identity map:
 
@@ -294,7 +300,18 @@ $user->posts()->where('published', true)->get();         // no SQL — filtered 
 
 Fallback to SQL when: the relation has not been loaded, the relation was loaded with extra constraints (constrained eager load), the query adds joins/unions/groups/havings/lock/offset/limit, the predicate cannot be evaluated in memory, or any member of the loaded collection has left the identity map.
 
-See [Architecture and internals](#architecture-and-internals) for how the memory relation implementations work.
+**`belongsToMany`** — many-to-many traversal is served from the identity graph when both sides are mapped and the pivot edges have been recorded. The graph stores `(parent, relation, related)` pivot edges, including pivot column values, so that `wherePivot`-style filters and basic predicates on the related model can be evaluated in memory:
+
+```php
+$user->load('roles');                                    // pivot edges + related models recorded
+
+$user->roles;                                            // no SQL — served from the graph
+$user->roles()->wherePivot('granted', true)->get();      // no SQL — pivot predicate evaluated in memory
+```
+
+Fallback to SQL when: the related model does not use `HasIdentityMap`, pivot coverage for the parent's `(class, id, relation)` slot has not been recorded, the query touches custom pivot accessors not present in the captured pivot columns, the query has joins/unions/groups/havings/lock/offset/limit, the relation uses `wherePivotIn` / `wherePivotNull` on columns not extractable to a predicate node, or the relation-graph cap is hit (config `relation_graph.max_edges` / `max_coverage_entries`). Disable the graph entirely with `IDENTITY_MAP_RELATION_GRAPH_ENABLED=false` if you suspect a bug.
+
+See [Architecture and internals](#architecture-and-internals) for how the memory relation implementations work, and [Identity graph](#identity-graph-relation_graph) for the data structure backing `belongsToMany`.
 
 ---
 
@@ -310,12 +327,13 @@ The decision order within the builder is: exact PK hit → absent-key short-circ
 
 ### Opt-in mechanism: HasIdentityMap
 
-Applying the `HasIdentityMap` trait to a model makes four structural changes:
+Applying the `HasIdentityMap` trait to a model makes five structural changes:
 
 1. `newEloquentBuilder()` is overridden to return `IdentityMapBuilder` instead of the standard builder.
 2. `newBelongsTo()` and `newMorphTo()` are overridden to return `MemoryBelongsTo` and `MemoryMorphTo`.
 3. `newHasMany()` and `newMorphMany()` are overridden to return `MemoryHasMany` and `MemoryMorphMany`.
-4. `bootHasIdentityMap()` registers five model event listeners: `retrieved`, `saved`, `deleted`, and — only when `SoftDeletes` is also present — `restored` and `forceDeleted`.
+4. `newBelongsToMany()` is overridden to return `MemoryBelongsToMany`.
+5. `bootHasIdentityMap()` registers model event listeners: `retrieved`, `saved`, `deleted` unconditionally, plus `restored` and `forceDeleted` when the model also uses `SoftDeletes`.
 
 The trait is model-scoped. Models without it are never stored in or served from the map, and queries on those models are entirely unaffected.
 
@@ -357,12 +375,13 @@ Structural hazards that trigger bypass include: joins, unions, `GROUP BY`, `HAVI
 
 ### Predicate evaluation
 
-When the extractor identifies predicates that should be evaluated in memory, `PredicateExtractor` converts the Eloquent WHERE clause list into a typed tree. The tree has four node types:
+When the extractor identifies predicates that should be evaluated in memory, `PredicateExtractor` converts the Eloquent WHERE clause list into a typed tree. The tree has five node types:
 
 - **`AndNode`** — a list of child nodes that must all evaluate to `Match`.
-- **`ComparisonNode`** — a single column/operator/value triple; supports `=`, `!=`, and `<>`.
+- **`ComparisonNode`** — a single column/operator/value triple; supports `=`, `!=`, `<>`, `>`, `>=`, `<`, `<=`.
 - **`InNode`** — `whereIn` (positive) or `whereNotIn` (negated).
 - **`NullNode`** — `whereNull` or `whereNotNull`.
+- **`BetweenNode`** — `whereBetween` (positive) or `whereNotBetween` (negated).
 
 `PredicateEvaluator` walks the tree against the `AttributeKnowledge` of a cached entry and returns one of three results:
 
@@ -382,7 +401,14 @@ Under `process_truth` mode, the evaluator uses the current in-memory attribute v
 - **currentValue** — the value currently on the model instance, which may differ if the model is dirty.
 - **isDirty** — whether the two values differ.
 - **confidence** — `Certain` (hydrated from a `SELECT *` or explicitly confirmed) or `Assumed` (inferred from a partial select or a mass-write plan).
-- **source** — where the fact came from: `HydratedFromDatabase`, `SavedToDatabase`, or a mass-write operation.
+- **source** — where the fact came from. One of the `FactSource` enum cases:
+  - `HydratedFromDatabase` — read directly from a `SELECT` result.
+  - `AssignedInMemory` — user code assigned the attribute on the model instance.
+  - `CastedModelAttribute` — value reflects an Eloquent cast applied during hydration.
+  - `AppendedAttribute` — value comes from a model accessor in `$appends`.
+  - `RelationDerived` — value was inferred from a related model (e.g. a foreign key set when a relation was assigned).
+  - `MassWrite` — value was written by a bulk `update()` whose predicate matched the entry.
+  - `Unknown` — fact source could not be classified.
 
 The `allColumnsKnown` flag is set when a model is hydrated from a full-row query. When it is `false`, the predicate evaluator will return `Unknown` for any column not present in the fact map, preventing the package from returning a stale partial model in place of a full-row result.
 
@@ -404,14 +430,16 @@ When a subsequent query arrives, `SubsetChecker` tests whether the new query's p
 
 Coverage entries are invalidated conservatively. When a model is saved, the registry flushes any coverage entries whose predicate region references columns that were changed. When a model is created or deleted, the entire coverage for that model class is flushed, since a new row could fall into any previously-recorded region.
 
-### Modes
+### Process-truth vs database-truth
 
 The `mode` config key controls a single behavioural switch: whether dirty in-memory attributes affect predicate evaluation.
 
 | Mode | What it does | Default? |
 |---|---|---|
-| `default` | Predicates evaluate against the last-committed (original) attribute value. Dirty mutations are ignored until `save()`. | **yes** |
+| `default` | Predicates evaluate against the last-committed (original) attribute value. Dirty mutations are ignored until `save()`. In-memory results always match a fresh `SELECT`. | **yes** |
 | `process_truth` | Predicates evaluate against the current in-memory value, which may be dirty. The unique-key index path is bypassed under this mode, since the index is keyed on original values. | |
+
+`mode = process_truth` is the only setting that can make memory-served results differ from what `SELECT` would return on a fresh connection. Use it when your workload expects assigned-but-unsaved attribute writes to be visible to downstream queries within the same request.
 
 The `IDENTITY_MAP_MODE` environment variable may be used to override the config value without republishing.
 
@@ -431,6 +459,57 @@ The old key is **not** read anymore: installs that still have `attribute_truth` 
 
 If you published the config, re-publish (or delete `attribute_truth` and add `mode`) and update any `.env` references. If you never published the config, only the environment variable rename matters.
 
+### Identity graph (`relation_graph`)
+
+`IdentityGraph` records `(parent, relation, related)` edges between mapped models so that relation queries can be answered from memory when the package has seen enough of the structure. It supports:
+
+- **Plain `RelationEdge`** entries for `belongsTo` / `hasMany` / `morphMany` / `morphTo`, captured each time a relation is hydrated.
+- **`PivotEdge`** entries for `belongsToMany`, including the captured pivot column values so that `wherePivot()`-style filters can be evaluated against the graph instead of the pivot table.
+- **`RelationCoverage`** / **`PivotCoverage`** markers that record "this parent's relation is fully loaded" so subsequent `$user->roles` reads can be served without SQL.
+
+The graph powers the `where_has_from_graph`, `where_doesnt_have_from_graph`, `belongs_to_many_from_graph`, and `where_pivot_in_memory` plans. It is invalidated per-model on `saved` (for the changed model's identity) and per-class on creation, deletion, and rolled-back transactions touching that class.
+
+| Config key | Default | Env override | Effect |
+|---|---|---|---|
+| `relation_graph.enabled` | `true` | `IDENTITY_MAP_RELATION_GRAPH_ENABLED` | Disable to bypass all graph-based plans; relation traversal falls back to per-relation memory paths or SQL. |
+| `relation_graph.max_edges` | `50000` | `IDENTITY_MAP_RELATION_GRAPH_MAX_EDGES` | When exceeded, the graph flushes entirely (safest behaviour). |
+| `relation_graph.max_coverage_entries` | `5000` | `IDENTITY_MAP_RELATION_GRAPH_MAX_COVERAGE` | When exceeded, the graph flushes entirely. |
+
+### Partial models & column backfill (`partial_models`)
+
+When a cached entry was loaded with a narrow `select(['id', 'name'])` and a later query asks for additional columns, the package can either re-run the original query (default) or issue a small `SELECT only_missing_columns FROM table WHERE id = ?` and merge the result into the cached instance.
+
+| Value | Behaviour |
+|---|---|
+| `query_normally` *(default)* | Cache miss → execute the full original query. Safe, equivalent to having no backfill. |
+| `backfill_missing_columns` | Cache hit on the primary key but missing some requested columns → issue a narrow backfill SELECT, merge into the cached model, return from memory. Dirty in-memory attributes are preserved (only `originalValue` is updated for those columns). |
+
+Backfill fires only for point lookups: `find()`, unique-key lookups, and `MemoryBelongsTo`. Coverage paths and `whereHas` rewrites still fall through to a full `SELECT` when columns are missing. Each backfill emits a `backfill_columns_from_database` explanation with `sqlExecuted: true`.
+
+Override via the `IDENTITY_MAP_PARTIAL_MODELS` environment variable.
+
+### Schema discovery (`schema_discovery`)
+
+`SchemaDiscovery` inspects each model's table on first use via `Schema::getIndexes()` / `Schema::getColumns()` and feeds the result into both the unique-key index and the per-column driver semantics. Config-declared unique indexes (under `models.{ClassName}.unique`) take precedence; discovered indexes supplement them.
+
+| Config key | Default | Env override |
+|---|---|---|
+| `schema_discovery.enabled` | `true` | `IDENTITY_MAP_SCHEMA_DISCOVERY` |
+
+Discovery results are cached on the singleton resolver and flushed on the same scope boundaries as the store (request termination, job processed/failed, scope flush). Disable it (`IDENTITY_MAP_SCHEMA_DISCOVERY=false`) if your DB driver does not expose index metadata in a way Laravel can read, or if you want to lock the package to only the unique sets declared in config.
+
+### Driver semantics (`database_semantics`)
+
+The predicate evaluator resolves comparisons through a per-connection `DriverSemantics` (one of `SqliteSemantics`, `MySqlSemantics`, `MariaDbSemantics`, `PostgresSemantics`, or `ConservativeSemantics`). Integer, boolean, UUID, and null comparisons are always resolved confidently. The `database_semantics.{driver}.string_comparisons` config key controls how string equality is handled:
+
+| Value | Behaviour |
+|---|---|
+| `database_collation` *(default)* | Read the column collation reported by `Schema::getColumns()` and compare under that collation. Falls back to the driver default — case-sensitive for SQLite/Postgres, Unknown for MySQL/MariaDB — when the collation is missing. |
+| `php_strict` | Treat every string column as case-sensitive byte-equality. Fast, but **wrong** on MySQL with case-insensitive collations: in-memory results will diverge from SQL. |
+| `conservative_unknown` | Return `Unknown` for every string comparison and let SQL handle it. Maximally safe but eliminates most string-predicate elision. |
+
+Each driver has its own env var (`IDENTITY_MAP_SQLITE_STRING_COMPARISONS`, `IDENTITY_MAP_MYSQL_STRING_COMPARISONS`, `IDENTITY_MAP_MARIADB_STRING_COMPARISONS`, `IDENTITY_MAP_PGSQL_STRING_COMPARISONS`). Set them when your MySQL deployment uses a case-insensitive collation (`utf8mb4_unicode_ci`, `utf8mb4_general_ci`, etc.) and you observe predicate-evaluation mismatches.
+
 ### Lifecycle hooks and automatic flushing
 
 The store and coverage registry are flushed automatically at scope boundaries to prevent stale data from leaking between independent units of work.
@@ -439,9 +518,9 @@ The store and coverage registry are flushed automatically at scope boundaries to
 
 **Queue jobs** — the store is flushed before and after each job via the `JobProcessing`, `JobProcessed`, and `JobFailed` events. This applies to both traditional queue workers and Octane workers processing jobs. A crashed job does not leave stale entries visible to the next job.
 
-**Database transaction rollback** — when a `TransactionRolledBack` event fires, the store is flushed. Without this, the package could serve attribute values from rows that were written inside a rolled-back transaction and no longer exist in the database.
+**Database transaction rollback** — a per-connection `TransactionJournal` snapshots the pre-modification state of any map entry touched inside a transaction. On `TransactionRolledBack` the journal **restores** those snapshots into the store, so cached attributes return to their pre-transaction values rather than reflecting rows that no longer exist. Coverage and graph entries for any model class touched in the rolled-back level are invalidated. Nested savepoints stack: rolling back an inner savepoint restores only that level; an outer rollback restores everything inherited by the parent. If a rollback fires without a matching tracked `begin()` — for example, when the package boots mid-transaction — the store, coverage registry, and identity graph are flushed entirely as a safe fallback.
 
-**Model events** — within a scope, five model events drive incremental updates rather than full flushes:
+**Model events** — within a scope, three to five model events drive incremental updates rather than full flushes (three by default; five when the model uses `SoftDeletes`):
 
 | Event | Action |
 |---|---|
@@ -462,17 +541,6 @@ After the SQL executes, the package evaluates the builder's predicate against ev
 - **`Unknown`** — the entry cannot be safely classified; it is evicted from the store so a future query will re-fetch it from the database.
 
 Eviction triggers a coverage flush for the model class, since any previously-recorded query region may now be incomplete.
-
-### Memory limits
-
-Only the identity graph has hard caps that the package enforces today; the identity-map store and coverage registry rely on scope flushing (HTTP terminate, queue job boundaries, transaction rollback) to bound their footprint within the lifetime of a single request or job.
-
-| Config key | Default | Env override |
-|---|---|---|
-| `relation_graph.max_edges` | 50000 | `IDENTITY_MAP_RELATION_GRAPH_MAX_EDGES` |
-| `relation_graph.max_coverage_entries` | 5000 | `IDENTITY_MAP_RELATION_GRAPH_MAX_COVERAGE` |
-
-When the graph exceeds either cap on a genuine insert, it is flushed entirely (the safest eviction). Tune downward in memory-constrained workers; raise when long-running jobs traverse very wide model graphs and the default flushes are causing more SQL than expected (check with `IdentityMap::explain()`).
 
 ### Observability: explain()
 
@@ -511,6 +579,26 @@ When the graph exceeds either cap on a genuine insert, it is flushed entirely (t
 | `return_pluck_from_coverage` | `pluck()` answered from coverage registry. |
 | `return_first_from_coverage` | `first()` answered from coverage registry. |
 | `return_sole_from_coverage` | `sole()` answered from coverage registry. |
+| `return_sum_from_coverage` | `sum()` aggregate answered from coverage registry. |
+| `return_min_from_coverage` | `min()` aggregate answered from coverage registry. |
+| `return_max_from_coverage` | `max()` aggregate answered from coverage registry. |
+| `return_avg_from_coverage` | `avg()` / `average()` aggregate answered from coverage registry. |
+| `where_has_from_graph` | `whereHas()` rewritten to a parent-key IN clause using the identity graph. |
+| `where_doesnt_have_from_graph` | `whereDoesntHave()` rewritten using the identity graph. |
+| `belongs_to_many_from_graph` | `belongsToMany` relation served from the identity graph (no SQL). |
+| `where_pivot_in_memory` | `belongsToMany` query filtered in memory via captured pivot columns. |
+| `backfill_columns_from_database` | Narrow `SELECT` issued to backfill missing columns on a cached entry (see [Partial models & column backfill](#partial-models--column-backfill-partial_models)). |
+
+`Explanation::__toString()` renders a short summary suitable for logging:
+
+```
+Plan: rewrite_predicate_and_merge
+Model: App\Models\User
+Reason: ...
+Known keys: [1, 2]
+Missing keys: [3]
+SQL executed: yes
+```
 
 ---
 
@@ -531,7 +619,7 @@ CI runs the full matrix: PHP 8.3, 8.4, 8.5 × Laravel 11, 12, 13 × SQLite, MySQ
 
 ### Unit tests
 
-**Location:** `tests/Unit/` (11 files)  
+**Location:** `tests/Unit/` (see directory for the current set)  
 **Extends:** `PHPUnit\Framework\TestCase` — no database, no service container, no Laravel boot.
 
 The unit suite tests the pure algorithms in isolation:
@@ -549,14 +637,14 @@ The unit suite is the fastest feedback loop. Any regression in the pure core —
 
 ### Feature tests
 
-**Location:** `tests/Feature/` (19 files)  
+**Location:** `tests/Feature/` (see directory for the current set, organised into subdirectories per subsystem)  
 **Extends:** `Vusys\QueryRicerExtreme\Tests\TestCase` (Orchestra Testbench + SQLite)
 
 The feature suite tests end-to-end behaviour with a real database and real Eloquent model lifecycle. It uses a fixed set of test models: `User` (with `HasIdentityMap` and `SoftDeletes`), `Post`, `Tag`, `Comment` (polymorphic morph), and `UuidUser` (UUID primary key).
 
 Core files:
 
-- `IdentityMapTest` — 75 tests covering the main builder path: `find()` caching and instance identity, absent-key tracking, `withoutIdentityMap()`, soft-delete scope separation, queries with joins/locks/aggregates that must bypass the map, `flush()` and `forget()`, the `explain()` API.
+- `IdentityMapTest` — main builder path: `find()` caching and instance identity, absent-key tracking, `withoutIdentityMap()`, soft-delete scope separation, queries with joins/locks/aggregates that must bypass the map, `flush()` and `forget()`, the `explain()` API.
 - `KeySetRewriteTest` — partial-hit rewriting: queries where some keys are in memory and some require SQL, with correct ordering and instance identity in the merged result.
 - `BelongsToMemoryTest`, `HasManyMemoryTest`, `MorphManyMemoryTest`, `MorphToMemoryTest` — one file per relation type, each verifying memory resolution and SQL fallback conditions.
 - `PredicateEvaluatorFeatureTest` — predicate evaluation integrated with real model hydration and Eloquent query building.
@@ -576,7 +664,7 @@ These tests use PHPUnit data providers to generate the Cartesian product of mult
 
 | File | Dimensions covered |
 |---|---|
-| `ConfigPermutationTest` | All six optimization modes crossed with the main query shapes |
+| `ConfigPermutationTest` | Unique-key config shapes (none / single-column / compound / multi-index) crossed with lookup methods and absence-tracking paths |
 | `PkTypeTest` | Integer and UUID primary key types |
 | `LifecycleStateTest` | All three `LifecycleState` values (Exists, SoftDeleted, Deleted) |
 | `WhereShapeTest` | Supported and unsupported WHERE operators; qualified vs unqualified column names; safe scoped queries |
@@ -592,23 +680,27 @@ The Cartesian suite catches bugs that only surface in specific combinations — 
 
 The fuzz suite uses seeded randomness so failures are reproducible. Each test method runs across multiple seeds × steps (default 3 × 20 = 60 iterations per method). When a test fails, the output includes `[seed=N step=M]`. Exact replay: `FUZZER_SEEDS=N FUZZER_STEPS=$((M+1)) composer fuzz`.
 
-**`QueryCorrectnessTest`** — differential (oracle) testing. Runs the same query through both the identity-map path and `IdentityMap::disabled()`, then asserts the two results are identical. Three methods:
+**`QueryCorrectnessTest`** — differential (oracle) testing. Runs the same query through both the identity-map path and `IdentityMap::disabled()`, then asserts the two results are identical. Five methods:
 
 - `test_find_by_primary_key_matches_oracle` — `find()` with 60/40 known/absent key ratio.
 - `test_where_key_collection_matches_oracle` — `whereKey()->get()` with random key subset and guaranteed-unknown IDs mixed in.
 - `test_active_predicate_via_key_set_matches_oracle` — `whereKey()->where('active', ...)->get()` with partial warm state and predicate pruning.
+- `test_where_has_with_graph_coverage_matches_oracle` — `whereHas('posts', …)` rewritten against the identity graph must match the bypassed query.
+- `test_where_doesnt_have_matches_oracle` — `whereDoesntHave` rewrite inverts membership semantics correctly.
 
-**`QuerySavingsTest`** — property-based SQL-count testing. Rather than checking equivalence, it asserts that the identity-map path fires *fewer* SQL queries than the oracle. Three methods:
+**`QuerySavingsTest`** — property-based SQL-count testing. Rather than checking equivalence, it asserts that the identity-map path fires *fewer* SQL queries than the oracle. Four methods:
 
 - `test_find_warm_entry_fires_no_sql` — `find()` on an already-cached ID must issue 0 SQL (oracle: 1).
 - `test_where_key_all_warm_fires_no_sql` — `whereKey()` on a fully-warm key set must issue 0 SQL (oracle: 1).
 - `test_absent_tracking_fires_no_sql_on_repeat` — a second `find()` on a confirmed-absent ID must issue 0 SQL.
+- `test_where_has_with_full_graph_coverage_fires_no_sql` — `whereHas` with complete graph coverage must answer from memory.
 
-**`RelationalCorrectnessTest`** — dual-database relational correctness. Uses a secondary isolated database connection as the oracle so relation traversal and write→read consistency are verified against a real second database, not just the disabled-flag path. Three methods:
+**`RelationalCorrectnessTest`** — dual-database relational correctness. Uses a secondary isolated database connection as the oracle so relation traversal and write→read consistency are verified against a real second database, not just the disabled-flag path. Four methods:
 
 - `test_keyset_reads_match_oracle` — partial-hit keyset reads via `whereKey()->get()`.
 - `test_relation_traversal_matches_oracle` — `user→posts→tag` and `user→comments` relation chains.
 - `test_mutation_read_consistency_matches_oracle` — save/delete/restore then re-read; detects stale-cache bugs the oracle would expose as a mismatch.
+- `test_pivot_mutation_read_consistency_matches_oracle` — `belongsToMany` pivot mutations (attach/detach/sync/updateExistingPivot) followed by re-reads must match the oracle.
 
 Together the three files cover two orthogonal properties — *correctness* (results match the database) and *savings* (SQL count is reduced) — and extend correctness testing to relation traversal and write consistency across every supported DB engine.
 
