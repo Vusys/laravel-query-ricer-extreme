@@ -1537,6 +1537,37 @@ class IdentityMapBuilder extends Builder
     }
 
     /**
+     * updateOrInsert lives only on the QueryBuilder; Eloquent\Builder forwards
+     * via __call. Its internal `$this->insert(...)` / `$this->update(...)` calls
+     * dispatch on the QueryBuilder itself, so our overrides on this class
+     * never see them. Trap the call here and flush the cache after the SQL.
+     *
+     * @param  array<string, mixed>  $attributes
+     * @param  array<string, mixed>|callable  $values
+     */
+    public function updateOrInsert(array $attributes, array|callable $values = []): bool
+    {
+        $result = $this->toBase()->updateOrInsert($attributes, $values);
+        $this->flushAfterBulkWrite();
+
+        return $result;
+    }
+
+    /**
+     * updateFrom is the PostgreSQL UPDATE … FROM variant. Same situation as
+     * updateOrInsert: lives on QueryBuilder, bypasses our overrides.
+     *
+     * @param  array<string, mixed>  $values
+     */
+    public function updateFrom(array $values): int
+    {
+        $result = $this->toBase()->updateFrom($values);
+        $this->flushAfterBulkWrite();
+
+        return $result;
+    }
+
+    /**
      * Distinguish a true bulk insert (`Post::insert([['col' => 'v'], ...])`) from
      * a single-row insert dispatched by Model::performInsert
      * (`Post::create([...])` produces a flat assoc array). The QueryBuilder

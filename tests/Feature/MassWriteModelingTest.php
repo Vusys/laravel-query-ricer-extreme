@@ -701,6 +701,22 @@ final class MassWriteModelingTest extends TestCase
     }
 
     #[Test]
+    public function update_or_insert_invalidates_cache(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'score' => 10]);
+        User::find($alice->id); // warm entry
+
+        User::query()->updateOrInsert(
+            ['email' => 'alice@example.com'],
+            ['score' => 77],
+        );
+
+        $aliceAfter = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $aliceAfter);
+        $this->assertSame(77, (int) $aliceAfter->score, 'cache must reflect the updateOrInsert');
+    }
+
+    #[Test]
     public function builder_touch_invalidates_cached_updated_at(): void
     {
         $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
