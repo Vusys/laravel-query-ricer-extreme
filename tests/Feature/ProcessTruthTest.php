@@ -494,6 +494,64 @@ final class ProcessTruthTest extends TestCase
     }
 
     #[Test]
+    public function where_has_belongs_to_inner_predicate_respects_dirty_parent(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com', active: true);
+        $post = Post::create(['user_id' => $alice->id, 'title' => 'P', 'published' => true]);
+        $this->store->flush();
+
+        // Warm: Alice in store with active=true (original), Post in store.
+        $aliceLive = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $aliceLive);
+        User::find($alice->id);
+        Post::find($post->id);
+
+        // Dirty: Alice.active flipped in memory only.
+        $aliceLive->active = false;
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = Post::whereKey([$post->id])
+            ->whereHas('user', fn ($q) => $q->where('active', true))
+            ->get();
+
+        $this->assertSame(0, $queryCount, 'whereHas BelongsTo must run in memory');
+        $this->assertCount(0, $result, 'process_truth: dirty parent excluded by whereHas inner predicate');
+    }
+
+    #[Test]
+    public function where_has_has_many_inner_predicate_respects_dirty_child(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        $post = Post::create(['user_id' => $alice->id, 'title' => 'P', 'published' => true]);
+        $this->store->flush();
+
+        $aliceLive = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $aliceLive);
+        // Load posts so the graph has full coverage of Alice's children.
+        $aliceLive->load('posts');
+
+        $dirtyPost = $aliceLive->posts->firstWhere('id', $post->id);
+        $this->assertInstanceOf(Post::class, $dirtyPost);
+        $dirtyPost->published = false;
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = User::whereKey([$alice->id])
+            ->whereHas('posts', fn ($q) => $q->where('published', true))
+            ->get();
+
+        $this->assertSame(0, $queryCount, 'whereHas HasMany must run in memory');
+        $this->assertCount(0, $result, 'process_truth: dirty child excluded by whereHas inner predicate');
+    }
+
+    #[Test]
     public function belongs_to_many_in_memory_filter_respects_dirty_related_value(): void
     {
         $alice = $this->createFresh('Alice', 'alice@example.com');

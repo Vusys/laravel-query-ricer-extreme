@@ -1772,7 +1772,13 @@ class IdentityMapBuilder extends Builder
             return EvaluationResult::Reject;
         }
 
-        return $evaluator->evaluate($parentEntry->attributes, $innerPredicate);
+        $processTruth = $this->isProcessTruth();
+
+        if ($processTruth) {
+            $parentEntry->attributes->syncFromModel($parentEntry->model);
+        }
+
+        return $evaluator->evaluate($parentEntry->attributes, $innerPredicate, $processTruth);
     }
 
     private function evaluateChildrenHas(
@@ -1795,6 +1801,7 @@ class IdentityMapBuilder extends Builder
 
         $connection = $related->getConnectionName() ?? 'default';
         $fingerprint = ScopeFingerprinter::fromModel($related);
+        $processTruth = $this->isProcessTruth();
         $hasUnknown = false;
 
         foreach ($coverage->childPrimaryKeys as $pk) {
@@ -1811,7 +1818,11 @@ class IdentityMapBuilder extends Builder
                 return EvaluationResult::Unknown;
             }
 
-            $childResult = $evaluator->evaluate($childEntry->attributes, $rewrite->innerPredicate);
+            if ($processTruth) {
+                $childEntry->attributes->syncFromModel($childEntry->model);
+            }
+
+            $childResult = $evaluator->evaluate($childEntry->attributes, $rewrite->innerPredicate, $processTruth);
 
             if ($childResult === EvaluationResult::Match) {
                 return EvaluationResult::Match;
