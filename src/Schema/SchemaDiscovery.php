@@ -33,7 +33,7 @@ final class SchemaDiscovery implements ColumnSemanticsResolver
 
         /** @var Model $instance */
         $instance = new $modelClass;
-        $connectionName = $instance->getConnectionName();
+        $connectionName = $instance->getConnection()->getName();
         $table = $instance->getTable();
         $cacheKey = $this->cacheKey($modelClass, $connectionName, $table);
 
