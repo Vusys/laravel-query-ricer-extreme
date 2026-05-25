@@ -701,6 +701,29 @@ final class MassWriteModelingTest extends TestCase
     }
 
     #[Test]
+    public function builder_touch_invalidates_cached_updated_at(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        User::find($alice->id);
+
+        $originalUpdatedAt = (string) $alice->updated_at;
+        Sleep::sleep(1);
+
+        User::where('id', $alice->id)->touch();
+
+        $aliceAfter = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $aliceAfter);
+        $fromDb = User::withoutIdentityMap()->find($alice->id);
+        $this->assertInstanceOf(User::class, $fromDb);
+        $this->assertNotSame($originalUpdatedAt, (string) $fromDb->updated_at, 'DB updated_at must have advanced');
+        $this->assertSame(
+            (string) $fromDb->updated_at,
+            (string) $aliceAfter->updated_at,
+            'cached updated_at must match the SQL UPDATE issued by Builder::touch()',
+        );
+    }
+
+    #[Test]
     public function insert_invalidates_coverage_for_model_class(): void
     {
         // Pre-warm coverage: AND([]) over Post with PKs from the seeded rows.

@@ -1521,6 +1521,22 @@ class IdentityMapBuilder extends Builder
     }
 
     /**
+     * Eloquent\Builder::touch dispatches to `$this->toBase()->update(...)`,
+     * which bypasses both model events and our update() override. The cache
+     * misses the new updated_at on touched rows.
+     *
+     * @param  array<int, string>|string|null  $column
+     */
+    #[\Override]
+    public function touch($column = null): int|false
+    {
+        $result = parent::touch($column);
+        $this->flushAfterBulkWrite();
+
+        return $result;
+    }
+
+    /**
      * Distinguish a true bulk insert (`Post::insert([['col' => 'v'], ...])`) from
      * a single-row insert dispatched by Model::performInsert
      * (`Post::create([...])` produces a flat assoc array). The QueryBuilder
