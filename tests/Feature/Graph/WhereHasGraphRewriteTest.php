@@ -334,6 +334,105 @@ final class WhereHasGraphRewriteTest extends TestCase
     }
 
     #[Test]
+    public function where_doesnt_have_nested_relation_string_falls_through(): void
+    {
+        [$alice, $bob] = $this->seedUsersWithPosts();
+
+        $this->startSqlListener();
+        $result = User::whereKey([$alice->id, $bob->id])
+            ->whereDoesntHave('posts.tag', fn ($q) => $q->where('name', 'php'))
+            ->get();
+
+        $this->assertSomeSql();
+        // Both have posts, none of which have a tag named 'php' → both qualify.
+        $this->assertCount(2, $result);
+    }
+
+    #[Test]
+    public function inner_predicate_with_or_boolean_falls_through(): void
+    {
+        [$alice, $bob] = $this->seedUsersWithPosts();
+
+        // The inner closure uses `orWhere` → my extractor bails (not an AND predicate),
+        // so no PendingHasRewrite is recorded → SQL handles the EXISTS.
+        $this->startSqlListener();
+        $result = User::whereKey([$alice->id, $bob->id])
+            ->whereHas('posts', fn ($q) => $q->where('published', true)->orWhere('title', 'B1'))
+            ->get();
+
+        $this->assertSomeSql();
+        $ids = $result->pluck('id')->all();
+        $this->assertContains($alice->id, $ids);
+        $this->assertContains($bob->id, $ids);
+    }
+
+    #[Test]
+    public function coverage_served_path_applies_where_has(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => true]);
+        $bob = User::create(['name' => 'Bob', 'email' => 'bob@example.com', 'active' => true]);
+
+        Post::create(['user_id' => $alice->id, 'title' => 'A1', 'published' => true]);
+        Post::create(['user_id' => $bob->id, 'title' => 'B1', 'published' => false]);
+
+        $alice->load('posts');
+        $bob->load('posts');
+
+        // Prime coverage registry with `active=true` region.
+        User::where('active', true)->get();
+
+        $this->startSqlListener();
+        $result = User::where('active', true)
+            ->whereHas('posts', fn ($q) => $q->where('published', true))
+            ->get();
+
+        $this->assertNoSql();
+        $this->assertCount(1, $result);
+        $this->assertSame($alice->id, $result->first()?->id);
+    }
+
+    #[Test]
+    public function single_pk_with_where_has_respects_inner_predicate(): void
+    {
+        // `where('id', $id)` exercises extractSinglePrimaryKeyLookup, not the bounded-key-set
+        // path — verify it doesn't short-circuit past the whereHas filter.
+        [$alice, $bob] = $this->seedUsersWithPosts();
+
+        // Bob has no published posts → whereHas filter must reject him even on PK match.
+        $result = User::where('id', $bob->id)
+            ->whereHas('posts', fn ($q) => $q->where('published', true))
+            ->get();
+
+        $this->assertCount(0, $result, 'single-PK lookup must apply whereHas filter');
+
+        $result2 = User::where('id', $alice->id)
+            ->whereHas('posts', fn ($q) => $q->where('published', true))
+            ->get();
+
+        $this->assertCount(1, $result2);
+        $this->assertSame($alice->id, $result2->first()?->id);
+    }
+
+    #[Test]
+    public function unique_key_lookup_with_where_has_respects_inner_predicate(): void
+    {
+        // `where('email', ...)` matches a unique index — separate path from key-set.
+        [$alice, $bob] = $this->seedUsersWithPosts();
+
+        $result = User::where('email', $bob->email)
+            ->whereHas('posts', fn ($q) => $q->where('published', true))
+            ->get();
+
+        $this->assertCount(0, $result, 'unique-key lookup must apply whereHas filter');
+
+        $result2 = User::where('email', $alice->email)
+            ->whereHas('posts', fn ($q) => $q->where('published', true))
+            ->get();
+
+        $this->assertCount(1, $result2);
+    }
+
+    #[Test]
     public function explanation_reason_distinguishes_memory_only_vs_partial_rewrite(): void
     {
         // All Users + all Posts first, then loads — otherwise creating dave

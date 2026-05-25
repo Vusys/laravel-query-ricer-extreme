@@ -381,18 +381,38 @@ class IdentityMapBuilder extends Builder
             );
 
             if ($entry !== null && $entry->state === LifecycleState::Exists && $entry->attributes->satisfies($columns)) {
-                $store->capture(new Explanation(
-                    type: PlanType::ReturnCollectionFromMemory,
-                    modelClass: $model::class,
-                    reason: 'exact-primary-key-hit-via-where',
-                    sqlExecuted: false,
-                    memoryKeys: [$primaryKeyId],
-                ));
+                $hasResult = $this->pendingHasRewrites === []
+                    ? EvaluationResult::Match
+                    : $this->evaluateHasRewrites($entry->model, $store, resolve(IdentityGraph::class));
 
-                /** @var TModel $cached */
-                $cached = $entry->model;
+                if ($hasResult === EvaluationResult::Match) {
+                    $store->capture(new Explanation(
+                        type: $this->pendingHasRewrites === []
+                            ? PlanType::ReturnCollectionFromMemory
+                            : $this->coveragePlanType(PlanType::ReturnCollectionFromMemory),
+                        modelClass: $model::class,
+                        reason: 'exact-primary-key-hit-via-where',
+                        sqlExecuted: false,
+                        memoryKeys: [$primaryKeyId],
+                    ));
 
-                return [$cached];
+                    /** @var TModel $cached */
+                    $cached = $entry->model;
+
+                    return [$cached];
+                }
+
+                if ($hasResult === EvaluationResult::Reject) {
+                    $store->capture(new Explanation(
+                        type: $this->coveragePlanType(PlanType::ReturnEmptyCollection),
+                        modelClass: $model::class,
+                        reason: 'where-has-filter-rejected',
+                        sqlExecuted: false,
+                    ));
+
+                    return [];
+                }
+                // Unknown → fall through to SQL.
             }
 
             if ($store->isAbsent(
@@ -578,39 +598,32 @@ class IdentityMapBuilder extends Builder
             $uniqueEntry = $this->revalidateUniqueEntry($uniqueEntry, $processTruth);
 
             if ($uniqueEntry instanceof IdentityEntry && $uniqueEntry->state === LifecycleState::Exists && $uniqueEntry->attributes->satisfies($columns)) {
+                $evalResult = EvaluationResult::Match;
+
                 if ($extraNodes !== []) {
                     $evaluator = new PredicateEvaluator;
                     $evalResult = $evaluator->evaluate($uniqueEntry->attributes, new AndNode($extraNodes), $processTruth);
+                }
 
-                    if ($evalResult === EvaluationResult::Reject) {
-                        $store->capture(new Explanation(
-                            type: PlanType::ReturnEmptyCollection,
-                            modelClass: $model::class,
-                            reason: 'unique-key-hit-predicate-rejected',
-                            sqlExecuted: false,
-                        ));
+                if ($evalResult !== EvaluationResult::Reject && $this->pendingHasRewrites !== []) {
+                    $hasResult = $this->evaluateHasRewrites($uniqueEntry->model, $store, resolve(IdentityGraph::class));
+                    $evalResult = $this->combineEvaluations($evalResult, $hasResult);
+                }
 
-                        return [];
-                    }
-
-                    if ($evalResult === EvaluationResult::Match) {
-                        $store->capture(new Explanation(
-                            type: PlanType::ReturnCollectionFromMemory,
-                            modelClass: $model::class,
-                            reason: 'unique-key-positive-hit',
-                            sqlExecuted: false,
-                            memoryKeys: [$uniqueEntry->primaryKeyValue],
-                        ));
-
-                        /** @var TModel $cached */
-                        $cached = $uniqueEntry->model;
-
-                        return [$cached];
-                    }
-                    // Unknown → fall through to SQL below
-                } else {
+                if ($evalResult === EvaluationResult::Reject) {
                     $store->capture(new Explanation(
-                        type: PlanType::ReturnCollectionFromMemory,
+                        type: $this->coveragePlanType(PlanType::ReturnEmptyCollection),
+                        modelClass: $model::class,
+                        reason: $this->pendingHasRewrites !== [] ? 'where-has-filter-rejected' : 'unique-key-hit-predicate-rejected',
+                        sqlExecuted: false,
+                    ));
+
+                    return [];
+                }
+
+                if ($evalResult === EvaluationResult::Match) {
+                    $store->capture(new Explanation(
+                        type: $this->coveragePlanType(PlanType::ReturnCollectionFromMemory),
                         modelClass: $model::class,
                         reason: 'unique-key-positive-hit',
                         sqlExecuted: false,
@@ -622,6 +635,7 @@ class IdentityMapBuilder extends Builder
 
                     return [$cached];
                 }
+                // Unknown → fall through to SQL below
             }
 
             if ($extraNodes === [] && ! $processTruth && $store->isAbsentByUniqueKey(
@@ -725,6 +739,13 @@ class IdentityMapBuilder extends Builder
         $store = resolve(IdentityMapStore::class);
 
         if ($store->isDisabled()) {
+            return parent::exists();
+        }
+
+        // The unique-key / coverage shortcuts below don't evaluate whereHas in
+        // memory; defer to SQL (which still applies the EXISTS) until exists()
+        // is wired through the has-rewrite evaluator.
+        if ($this->pendingHasRewrites !== []) {
             return parent::exists();
         }
 
