@@ -14,6 +14,8 @@ use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Vusys\QueryRicerExtreme\Coverage\CoverageRegistry;
+use Vusys\QueryRicerExtreme\Driver\ColumnSemanticsResolver;
+use Vusys\QueryRicerExtreme\Driver\DriverSemanticsResolver;
 use Vusys\QueryRicerExtreme\Graph\IdentityGraph;
 use Vusys\QueryRicerExtreme\Schema\SchemaDiscovery;
 use Vusys\QueryRicerExtreme\Store\IdentityMapStore;
@@ -31,6 +33,8 @@ class QueryRicerExtremeServiceProvider extends ServiceProvider
         $this->app->singleton(IdentityMapStore::class);
         $this->app->singleton(CoverageRegistry::class);
         $this->app->singleton(SchemaDiscovery::class);
+        $this->app->singleton(DriverSemanticsResolver::class);
+        $this->app->singleton(ColumnSemanticsResolver::class, fn ($app) => $app->make(SchemaDiscovery::class));
         $this->app->singleton(IdentityGraph::class, function (): IdentityGraph {
             $maxEdges = config('query-ricer-extreme.relation_graph.max_edges');
             $maxCoverage = config('query-ricer-extreme.relation_graph.max_coverage_entries');

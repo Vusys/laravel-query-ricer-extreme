@@ -55,11 +55,13 @@ final class WhereShapeTest extends TestCase
             'neq float match' => ['!=', 1.5,     2.5,     EvaluationResult::Match],
             'neq float reject' => ['!=', 1.5,     1.5,     EvaluationResult::Reject],
 
-            // Boolean / truthy (loose == so 1 == true)
-            'eq bool true stored match' => ['=',  1,       true,    EvaluationResult::Match],
-            'eq bool false stored match' => ['=',  0,       false,   EvaluationResult::Match],
-            'eq bool true reject' => ['=',  1,       false,   EvaluationResult::Reject],
-            'eq bool false reject' => ['=',  0,       true,    EvaluationResult::Reject],
+            // Cross-type int↔bool — Unknown under ConservativeSemantics (the
+            // default profile). Driver-aware profiles handle tinyint↔bool
+            // coercion correctly in their own tests.
+            'eq int bool same-shape unknown' => ['=',  1,       true,    EvaluationResult::Unknown],
+            'eq int zero bool false unknown' => ['=',  0,       false,   EvaluationResult::Unknown],
+            'eq int bool mismatched unknown' => ['=',  1,       false,   EvaluationResult::Unknown],
+            'eq int zero bool true unknown' => ['=',  0,       true,    EvaluationResult::Unknown],
 
             // Null equality: SQL NULL comparisons always yield NULL (Unknown), never Match/Reject.
             // PHP loose equality would match null==null, null==0 etc., which is incorrect SQL semantics.
