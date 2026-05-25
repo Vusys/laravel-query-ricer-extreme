@@ -158,13 +158,10 @@ final readonly class ColumnBackfiller
 
             if ($existing instanceof AttributeFact) {
                 $existing->originalValue = $fetchedValue;
+                $existing->currentValue = $isDirty ? ($dirtyOverrides[$column] ?? $fetchedValue) : $fetchedValue;
+                $existing->isDirty = $isDirty;
                 $existing->confidence = FactConfidence::Certain;
                 $existing->source = FactSource::HydratedFromDatabase;
-
-                if (! $isDirty) {
-                    $existing->currentValue = $fetchedValue;
-                    $existing->isDirty = false;
-                }
             } else {
                 $entry->attributes->set($column, new AttributeFact(
                     column: $column,
