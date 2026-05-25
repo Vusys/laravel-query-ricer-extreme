@@ -179,14 +179,23 @@ final class SchemaDiscovery implements ColumnSemanticsResolver
     {
         $connection = DB::connection($connectionName);
         $dispatcher = $connection->getEventDispatcher();
+        $loggingWasEnabled = $connection->logging();
 
         if ($dispatcher !== null) {
             $connection->unsetEventDispatcher();
         }
 
+        if ($loggingWasEnabled) {
+            $connection->disableQueryLog();
+        }
+
         try {
             return $callback();
         } finally {
+            if ($loggingWasEnabled) {
+                $connection->enableQueryLog();
+            }
+
             if ($dispatcher !== null) {
                 $connection->setEventDispatcher($dispatcher);
             }

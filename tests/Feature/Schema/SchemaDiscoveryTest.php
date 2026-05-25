@@ -6,6 +6,7 @@ namespace Vusys\QueryRicerExtreme\Tests\Feature\Schema;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use PHPUnit\Framework\Attributes\Test;
 use Vusys\QueryRicerExtreme\Schema\SchemaDiscovery;
@@ -233,5 +234,17 @@ final class SchemaDiscoveryTest extends TestCase
         config(['query-ricer-extreme.schema_discovery.enabled' => false]);
 
         $this->assertSame([], $this->discovery->uniqueIndexesFor(User::class));
+    }
+
+    #[Test]
+    public function introspection_does_not_pollute_db_query_log(): void
+    {
+        DB::connection()->flushQueryLog();
+        DB::connection()->enableQueryLog();
+
+        $this->discovery->uniqueIndexesFor(User::class);
+        $this->discovery->for(new User, 'email');
+
+        $this->assertSame([], DB::connection()->getQueryLog(), 'Schema introspection PRAGMA / information_schema queries must not appear in the user-facing query log');
     }
 }
