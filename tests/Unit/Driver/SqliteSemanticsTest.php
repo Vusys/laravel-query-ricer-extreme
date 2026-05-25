@@ -63,4 +63,14 @@ final class SqliteSemanticsTest extends TestCase
         self::assertSame(0, $s->compareForOrder('a', 'a', ColumnSemantics::unknown()));
         self::assertSame(1, $s->compareForOrder('b', 'a', ColumnSemantics::unknown()));
     }
+
+    #[Test]
+    public function case_insensitive_column_orders_with_case_folding(): void
+    {
+        $s = new SqliteSemantics;
+        $col = new ColumnSemantics(ColumnType::String, null, StringComparisonMode::CaseInsensitive);
+        self::assertSame(-1, $s->compareForOrder('alice', 'BOB', $col));
+        self::assertSame(0, $s->compareForOrder('Alice', 'alice', $col));
+        self::assertSame(1, $s->compareForOrder('BOB', 'alice', $col));
+    }
 }

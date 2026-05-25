@@ -65,4 +65,24 @@ final class MySqlSemanticsTest extends TestCase
         $s = new MySqlSemantics;
         self::assertNull($s->compareForOrder('alice', 'bob', ColumnSemantics::unknown()));
     }
+
+    #[Test]
+    public function case_sensitive_ordering_uses_byte_compare(): void
+    {
+        $s = new MySqlSemantics;
+        $col = new ColumnSemantics(ColumnType::String, 'utf8mb4_bin', StringComparisonMode::CaseSensitive);
+        self::assertSame(-1, $s->compareForOrder('alice', 'bob', $col));
+        self::assertSame(0, $s->compareForOrder('alice', 'alice', $col));
+        self::assertSame(1, $s->compareForOrder('bob', 'alice', $col));
+    }
+
+    #[Test]
+    public function case_insensitive_ordering_folds_case(): void
+    {
+        $s = new MySqlSemantics;
+        $col = new ColumnSemantics(ColumnType::String, 'utf8mb4_unicode_ci', StringComparisonMode::CaseInsensitive);
+        self::assertSame(-1, $s->compareForOrder('alice', 'BOB', $col));
+        self::assertSame(0, $s->compareForOrder('Alice', 'alice', $col));
+        self::assertSame(1, $s->compareForOrder('BOB', 'alice', $col));
+    }
 }

@@ -52,5 +52,27 @@ final class PostgresSemanticsTest extends TestCase
         $s = new PostgresSemantics;
         self::assertSame(-1, $s->compareForOrder('alice', 'bob', ColumnSemantics::unknown()));
         self::assertSame(0, $s->compareForOrder('alice', 'alice', ColumnSemantics::unknown()));
+        self::assertSame(1, $s->compareForOrder('bob', 'alice', ColumnSemantics::unknown()));
+    }
+
+    #[Test]
+    public function citext_ordering_folds_case(): void
+    {
+        $s = new PostgresSemantics;
+        $col = new ColumnSemantics(ColumnType::String, null, StringComparisonMode::CaseInsensitive);
+        self::assertSame(-1, $s->compareForOrder('alice', 'BOB', $col));
+        self::assertSame(0, $s->compareForOrder('Alice', 'alice', $col));
+        self::assertSame(1, $s->compareForOrder('BOB', 'alice', $col));
+    }
+
+    #[Test]
+    public function case_sensitive_strings_match_only_byte_identical(): void
+    {
+        $s = new PostgresSemantics;
+        // Direct evidence that byte-identical resolves Match; byte-different
+        // resolves Reject (kills the `$left === $right` → `!==` mutation).
+        self::assertSame(EvaluationResult::Match, $s->compare('bryan', '=', 'bryan', ColumnSemantics::unknown()));
+        self::assertSame(EvaluationResult::Reject, $s->compare('bryan', '=', 'BRYAN', ColumnSemantics::unknown()));
+        self::assertSame(EvaluationResult::Reject, $s->compare('bryan', '=', 'alice', ColumnSemantics::unknown()));
     }
 }
