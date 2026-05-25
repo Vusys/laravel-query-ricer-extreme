@@ -16,7 +16,9 @@ use Vusys\QueryRicerExtreme\Graph\IdentityGraph;
 use Vusys\QueryRicerExtreme\Graph\ModelIdentity;
 use Vusys\QueryRicerExtreme\Graph\RelationEdge;
 use Vusys\QueryRicerExtreme\HasIdentityMap;
+use Vusys\QueryRicerExtreme\Knowledge\ColumnBackfiller;
 use Vusys\QueryRicerExtreme\Query\ScopeFingerprinter;
+use Vusys\QueryRicerExtreme\Store\IdentityEntry;
 use Vusys\QueryRicerExtreme\Store\IdentityMapStore;
 
 /**
@@ -99,21 +101,25 @@ final class MemoryBelongsTo extends BelongsTo
                 // else: SELECT contains raw expressions — cannot serve from cache
             }
 
-            if ($colList !== null && $entry->attributes->satisfies($colList)) {
-                $store->capture(new Explanation(
-                    type: PlanType::ReturnBelongsToFromMemory,
-                    modelClass: $related::class,
-                    reason: 'belongs-to-memory-hit',
-                    sqlExecuted: false,
-                    memoryKeys: [$entry->primaryKeyValue],
-                ));
+            if ($colList !== null) {
+                $hitMode = $this->resolveHit($entry, $colList);
 
-                /** @var TRelatedModel $cached */
-                $cached = $entry->model;
+                if ($hitMode !== null) {
+                    $store->capture(new Explanation(
+                        type: PlanType::ReturnBelongsToFromMemory,
+                        modelClass: $related::class,
+                        reason: $hitMode === 'backfilled' ? 'belongs-to-memory-hit-after-backfill' : 'belongs-to-memory-hit',
+                        sqlExecuted: false,
+                        memoryKeys: [$entry->primaryKeyValue],
+                    ));
 
-                $this->recordGraphEdge($cached);
+                    /** @var TRelatedModel $cached */
+                    $cached = $entry->model;
 
-                return $cached;
+                    $this->recordGraphEdge($cached);
+
+                    return $cached;
+                }
             }
         }
 
@@ -129,6 +135,30 @@ final class MemoryBelongsTo extends BelongsTo
         }
 
         return $result;
+    }
+
+    /**
+     * @param  list<string>  $columns
+     */
+    private function resolveHit(IdentityEntry $entry, array $columns): ?string
+    {
+        if ($entry->attributes->satisfies($columns)) {
+            return 'hit';
+        }
+
+        $backfiller = resolve(ColumnBackfiller::class);
+
+        if (! $backfiller->isEnabled()) {
+            return null;
+        }
+
+        $missing = $backfiller->missingColumns($entry, $columns);
+
+        if ($missing === []) {
+            return null;
+        }
+
+        return $backfiller->backfill($entry, $missing) ? 'backfilled' : null;
     }
 
     private function recordGraphEdge(Model $parent): void

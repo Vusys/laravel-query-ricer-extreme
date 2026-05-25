@@ -56,6 +56,26 @@ return [
     ],
 
     /*
+     * Partial model column backfill.
+     *
+     *   query_normally          — when a cached model is missing a requested column,
+     *                             execute the full original query. The map is updated
+     *                             with the wider row. Safe default — no behavioural
+     *                             change relative to earlier milestones.
+     *   backfill_missing_columns — issue a narrow SELECT for the missing columns only,
+     *                              keyed on the cached model's primary key, and merge
+     *                              the fetched columns into the existing instance.
+     *                              Dirty in-memory attributes are preserved (the merge
+     *                              only updates AttributeFact::originalValue for dirty
+     *                              columns; currentValue and the model's actual
+     *                              attribute stay as the dirty value).
+     *
+     * Only point lookups (find / unique-key / MemoryBelongsTo) backfill. Coverage and
+     * whereHas paths still fall through to a full SELECT when columns are missing.
+     */
+    'partial_models' => env('IDENTITY_MAP_PARTIAL_MODELS', 'query_normally'),
+
+    /*
      * Hard memory caps. Entries beyond these limits are not cached; the query falls
      * through to SQL. Tune downward in memory-constrained environments.
      */

@@ -31,4 +31,5 @@ enum PlanType: string
     case WhereDoesntHaveFromGraph = 'where_doesnt_have_from_graph';
     case BelongsToManyFromGraph = 'belongs_to_many_from_graph';
     case WherePivotInMemory = 'where_pivot_in_memory';
+    case BackfillColumnsFromDatabase = 'backfill_columns_from_database';
 }

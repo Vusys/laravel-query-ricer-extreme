@@ -30,6 +30,7 @@ use Vusys\QueryRicerExtreme\Explanation;
 use Vusys\QueryRicerExtreme\Graph\IdentityGraph;
 use Vusys\QueryRicerExtreme\Graph\ModelIdentity;
 use Vusys\QueryRicerExtreme\Graph\RelationCoverage;
+use Vusys\QueryRicerExtreme\Knowledge\ColumnBackfiller;
 use Vusys\QueryRicerExtreme\Predicate\AndNode;
 use Vusys\QueryRicerExtreme\Predicate\PredicateEvaluator;
 use Vusys\QueryRicerExtreme\Predicate\PredicateExtractor;
@@ -276,22 +277,26 @@ class IdentityMapBuilder extends Builder
             fingerprint: $fingerprint,
         );
 
-        if ($entry !== null && $entry->state === LifecycleState::Exists && $entry->attributes->satisfies($columns)) {
-            $store->capture(new Explanation(
-                type: PlanType::ReturnModelFromMemory,
-                modelClass: $model::class,
-                reason: 'exact-primary-key-hit',
-                sqlExecuted: false,
-                memoryKeys: [$id],
-            ));
-            /** @var TModel $cached */
-            $cached = $entry->model;
+        if ($entry !== null && $entry->state === LifecycleState::Exists) {
+            $hitMode = $this->tryServeFromMemory($entry, $columns);
 
-            if ($this->eagerLoad !== []) {
-                $this->eagerLoadRelations([$cached]);
+            if ($hitMode !== null) {
+                $store->capture(new Explanation(
+                    type: PlanType::ReturnModelFromMemory,
+                    modelClass: $model::class,
+                    reason: $hitMode === 'backfilled' ? 'exact-primary-key-hit-after-backfill' : 'exact-primary-key-hit',
+                    sqlExecuted: false,
+                    memoryKeys: [$id],
+                ));
+                /** @var TModel $cached */
+                $cached = $entry->model;
+
+                if ($this->eagerLoad !== []) {
+                    $this->eagerLoadRelations([$cached]);
+                }
+
+                return $cached;
             }
-
-            return $cached;
         }
 
         if ($store->isAbsent(
@@ -327,7 +332,7 @@ class IdentityMapBuilder extends Builder
         }
 
         if ($result instanceof Model) {
-            if ($columns === ['*']) {
+            if ($this->fetchedAllColumns($columns)) {
                 $store->markAllColumnsKnown($result);
             }
         } elseif ($result === null) {
@@ -380,7 +385,13 @@ class IdentityMapBuilder extends Builder
                 fingerprint: $fingerprint,
             );
 
-            if ($entry !== null && $entry->state === LifecycleState::Exists && $entry->attributes->satisfies($columns)) {
+            if ($entry !== null && $entry->state === LifecycleState::Exists) {
+                $hitMode = $this->tryServeFromMemory($entry, $columns);
+            } else {
+                $hitMode = null;
+            }
+
+            if ($entry !== null && $entry->state === LifecycleState::Exists && $hitMode !== null) {
                 $hasResult = $this->pendingHasRewrites === []
                     ? EvaluationResult::Match
                     : $this->evaluateHasRewrites($entry->model, $store, resolve(IdentityGraph::class));
@@ -391,7 +402,7 @@ class IdentityMapBuilder extends Builder
                             ? PlanType::ReturnCollectionFromMemory
                             : $this->coveragePlanType(PlanType::ReturnCollectionFromMemory),
                         modelClass: $model::class,
-                        reason: 'exact-primary-key-hit-via-where',
+                        reason: $hitMode === 'backfilled' ? 'exact-primary-key-hit-via-where-after-backfill' : 'exact-primary-key-hit-via-where',
                         sqlExecuted: false,
                         memoryKeys: [$primaryKeyId],
                     ));
@@ -529,7 +540,7 @@ class IdentityMapBuilder extends Builder
                 $store->setPendingFingerprint(null);
             }
 
-            $isFullSelect = $columns === ['*'];
+            $isFullSelect = $this->fetchedAllColumns($columns);
 
             $fetchedByKey = [];
             foreach ($fetched as $fetchedModel) {
@@ -597,7 +608,11 @@ class IdentityMapBuilder extends Builder
             $processTruth = $this->isProcessTruth();
             $uniqueEntry = $this->revalidateUniqueEntry($uniqueEntry, $processTruth);
 
-            if ($uniqueEntry instanceof IdentityEntry && $uniqueEntry->state === LifecycleState::Exists && $uniqueEntry->attributes->satisfies($columns)) {
+            $uniqueHitMode = ($uniqueEntry instanceof IdentityEntry && $uniqueEntry->state === LifecycleState::Exists)
+                ? $this->tryServeFromMemory($uniqueEntry, $columns)
+                : null;
+
+            if ($uniqueEntry instanceof IdentityEntry && $uniqueEntry->state === LifecycleState::Exists && $uniqueHitMode !== null) {
                 $evalResult = EvaluationResult::Match;
 
                 if ($extraNodes !== []) {
@@ -625,7 +640,7 @@ class IdentityMapBuilder extends Builder
                     $store->capture(new Explanation(
                         type: $this->coveragePlanType(PlanType::ReturnCollectionFromMemory),
                         modelClass: $model::class,
-                        reason: 'unique-key-positive-hit',
+                        reason: $uniqueHitMode === 'backfilled' ? 'unique-key-positive-hit-after-backfill' : 'unique-key-positive-hit',
                         sqlExecuted: false,
                         memoryKeys: [$uniqueEntry->primaryKeyValue],
                     ));
@@ -662,7 +677,7 @@ class IdentityMapBuilder extends Builder
                 $store->setPendingFingerprint(null);
             }
 
-            $isFullSelect = $columns === ['*'];
+            $isFullSelect = $this->fetchedAllColumns($columns);
 
             foreach ($models as $result) {
                 if ($isFullSelect) {
@@ -705,7 +720,7 @@ class IdentityMapBuilder extends Builder
             $store->setPendingFingerprint(null);
         }
 
-        $isFullSelect = $columns === ['*'];
+        $isFullSelect = $this->fetchedAllColumns($columns);
 
         foreach ($models as $result) {
             if ($isFullSelect) {
@@ -1602,6 +1617,66 @@ class IdentityMapBuilder extends Builder
     private function isProcessTruth(): bool
     {
         return config('query-ricer-extreme.attribute_truth', 'database_only') === 'process_truth';
+    }
+
+    /**
+     * Decide whether the underlying SQL actually fetched every column.
+     *
+     * The caller-supplied $columns is unreliable on its own: parent::first()
+     * forwards ['*'] to get() / getModels() even when select() was previously
+     * called, in which case the actual SQL has a narrowed column list. We must
+     * cross-check against $query->columns to avoid marking partial loads as
+     * "all columns known".
+     *
+     * @param  list<string>|array<int, string>  $columns
+     */
+    private function fetchedAllColumns(array $columns): bool
+    {
+        if ($columns !== ['*']) {
+            return false;
+        }
+
+        $queryColumns = $this->getQuery()->columns;
+
+        if ($queryColumns === null || $queryColumns === []) {
+            return true;
+        }
+
+        return $queryColumns === ['*'];
+    }
+
+    /**
+     * Decide whether $entry can serve a request for $columns.
+     *
+     * Returns 'hit' when the entry already satisfies the request, 'backfilled' when
+     * the entry satisfied the request only after a narrow SELECT for missing columns,
+     * or null when neither path applies and the caller must fall through to SQL.
+     *
+     * The 'backfilled' path is only taken when partial_models =
+     * 'backfill_missing_columns'. Coverage and ['*'] requests never backfill — they
+     * always fall through if not already satisfied.
+     *
+     * @param  list<string>|array<int, string>  $columns
+     */
+    private function tryServeFromMemory(IdentityEntry $entry, array $columns): ?string
+    {
+        if ($entry->attributes->satisfies($columns)) {
+            return 'hit';
+        }
+
+        $backfiller = resolve(ColumnBackfiller::class);
+
+        if (! $backfiller->isEnabled()) {
+            return null;
+        }
+
+        $missing = $backfiller->missingColumns($entry, $columns);
+
+        if ($missing === []) {
+            return null;
+        }
+
+        return $backfiller->backfill($entry, $missing) ? 'backfilled' : null;
     }
 
     private function evaluateHasRewrites(Model $candidate, IdentityMapStore $store, IdentityGraph $graph): EvaluationResult
