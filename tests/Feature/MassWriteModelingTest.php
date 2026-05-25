@@ -13,6 +13,7 @@ use Vusys\QueryRicerExtreme\Predicate\ComparisonNode;
 use Vusys\QueryRicerExtreme\Predicate\PredicateEvaluator;
 use Vusys\QueryRicerExtreme\Store\IdentityMapStore;
 use Vusys\QueryRicerExtreme\Tests\Models\Post;
+use Vusys\QueryRicerExtreme\Tests\Models\Tag;
 use Vusys\QueryRicerExtreme\Tests\Models\User;
 use Vusys\QueryRicerExtreme\Tests\TestCase;
 
@@ -701,6 +702,19 @@ final class MassWriteModelingTest extends TestCase
     }
 
     #[Test]
+    public function mass_decrement_each_invalidates_cached_entries(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'score' => 10]);
+        User::find($alice->id);
+
+        User::where('id', $alice->id)->decrementEach(['score' => 4]);
+
+        $aliceAfter = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $aliceAfter);
+        $this->assertSame(6, (int) $aliceAfter->score);
+    }
+
+    #[Test]
     public function update_or_insert_invalidates_cache(): void
     {
         $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'score' => 10]);
@@ -737,6 +751,47 @@ final class MassWriteModelingTest extends TestCase
             (string) $aliceAfter->updated_at,
             'cached updated_at must match the SQL UPDATE issued by Builder::touch()',
         );
+    }
+
+    #[Test]
+    public function insert_or_ignore_invalidates_coverage_for_model_class(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        Post::create(['user_id' => $alice->id, 'title' => 'P1', 'published' => true]);
+
+        // Warm coverage.
+        $coveredBefore = Post::where('published', true)->get();
+        $this->assertCount(1, $coveredBefore);
+
+        Post::insertOrIgnore([
+            ['user_id' => $alice->id, 'title' => 'P2', 'published' => true, 'view_count' => 0],
+        ]);
+
+        $coveredAfter = Post::where('published', true)->get();
+        $this->assertCount(2, $coveredAfter, 'coverage must be invalidated by insertOrIgnore');
+    }
+
+    #[Test]
+    public function insert_using_invalidates_coverage_for_model_class(): void
+    {
+        // Seed a Tag we can mirror into Post via insertUsing.
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        Tag::create(['name' => 'tagA', 'priority' => 1]);
+        Post::create(['user_id' => $alice->id, 'title' => 'P-existing', 'published' => true]);
+
+        $coveredBefore = Post::where('published', true)->get();
+        $this->assertCount(1, $coveredBefore);
+
+        // Use insertUsing to add a row sourced from another query.
+        Post::insertUsing(
+            ['user_id', 'title', 'published', 'view_count', 'created_at', 'updated_at'],
+            fn ($q) => $q->from('tags')->selectRaw('? as user_id, name as title, true as published, 0 as view_count, ? as created_at, ? as updated_at', [
+                $alice->id, now()->toDateTimeString(), now()->toDateTimeString(),
+            ]),
+        );
+
+        $coveredAfter = Post::where('published', true)->get();
+        $this->assertCount(2, $coveredAfter, 'coverage must be invalidated by insertUsing');
     }
 
     #[Test]

@@ -338,7 +338,108 @@ final class MemoryBelongsToMany extends BelongsToMany
         $graph->forgetPivotCoverage($parentIdentity, $relationName);
         $graph->clearPivotEdgesFor($parentIdentity, $relationName);
 
+        // Mirror the flush on the inverse side: the same pivot row backs a
+        // BelongsToMany on the related model, and its cached pivot edges /
+        // coverage would otherwise return stale attribute values too.
+        // `$this->related` is the relation's prototype instance (no PK), so
+        // we hydrate a thin identity for the specific related row by id.
+        $inverseRelationName = $this->resolveInverseRelationName();
+        $relatedKey = $this->normalizeUpdateExistingPivotId($id);
+        $relatedIdentity = ($inverseRelationName !== null && $relatedKey !== null)
+            ? $this->relatedIdentityFromKey($relatedKey)
+            : null;
+
+        if ($relatedIdentity instanceof ModelIdentity) {
+            /** @var string $inverseRelationName $relatedIdentity is only non-null when we resolved the inverse name */
+            $graph->forgetPivotCoverage($relatedIdentity, $inverseRelationName);
+            $graph->clearPivotEdgesFor($relatedIdentity, $inverseRelationName);
+        }
+
         return $updated;
+    }
+
+    /**
+     * Normalise the $id passed to updateExistingPivot — accepts a Model
+     * instance or a scalar — to the int|string primary key the graph keys on.
+     *
+     * @param  mixed  $id
+     */
+    private function normalizeUpdateExistingPivotId($id): int|string|null
+    {
+        if ($id instanceof Model) {
+            $key = $id->getKey();
+
+            return is_int($key) || is_string($key) ? $key : null;
+        }
+
+        return is_int($id) || is_string($id) ? $id : null;
+    }
+
+    /**
+     * Find the name of the BelongsToMany relation on $this->related that points
+     * back to $this->parent's class via the same pivot table. Returns null if
+     * the related model does not declare an inverse relation. Results are
+     * cached per (related-class, parent-class, pivot-table) tuple to keep the
+     * reflection cost flat across repeated calls.
+     */
+    private function resolveInverseRelationName(): ?string
+    {
+        static $cache = [];
+
+        $relatedClass = $this->related::class;
+        $parentClass = $this->parent::class;
+        $pivotTable = $this->table;
+        $cacheKey = $relatedClass.'|'.$parentClass.'|'.$pivotTable;
+
+        if (array_key_exists($cacheKey, $cache)) {
+            return $cache[$cacheKey];
+        }
+
+        $reflection = new \ReflectionClass($relatedClass);
+
+        foreach ($reflection->getMethods(\ReflectionMethod::IS_PUBLIC) as $method) {
+            if ($method->isStatic()) {
+                continue;
+            }
+            if ($method->getNumberOfRequiredParameters() > 0) {
+                continue;
+            }
+            if ($method->getDeclaringClass()->getName() !== $relatedClass) {
+                // Skip inherited framework methods; the inverse relation is
+                // expected to live on the related model directly.
+                continue;
+            }
+
+            $returnType = $method->getReturnType();
+
+            if (! $returnType instanceof \ReflectionNamedType) {
+                continue;
+            }
+
+            $typeName = $returnType->getName();
+
+            if ($typeName !== BelongsToMany::class
+                && ! is_subclass_of($typeName, BelongsToMany::class)
+            ) {
+                continue;
+            }
+
+            try {
+                $relation = $this->related->{$method->getName()}();
+            } catch (\Throwable) {
+                continue;
+            }
+
+            if (! $relation instanceof BelongsToMany) {
+                continue;
+            }
+
+            if ($relation->getRelated()::class === $parentClass && $relation->getTable() === $pivotTable) {
+                return $cache[$cacheKey] = $method->getName();
+            }
+        }
+
+        return $cache[$cacheKey] = null;
     }
 
     /**

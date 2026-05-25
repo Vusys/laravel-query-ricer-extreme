@@ -338,4 +338,29 @@ final class BelongsToManyGraphTest extends TestCase
 
         $this->assertCount(1, $hitsAfter, 'updateExistingPivot must keep cached pivot attributes coherent with the DB');
     }
+
+    #[Test]
+    public function update_existing_pivot_invalidates_inverse_side_too(): void
+    {
+        $post = $this->postWithTags(1);
+        $tag = $post->tags->first();
+        $this->assertNotNull($tag);
+
+        // Warm both sides with the *complete* set so pivot coverage is
+        // recorded on each (wherePivot filters skip coverage recording).
+        $post->tags()->get();
+        $tag->posts()->get();
+
+        // Update via the post side. The inverse (tag->posts) must also be
+        // invalidated, since both sides read the same pivot row.
+        $post->tags()->updateExistingPivot($tag->id, ['priority' => 99]);
+
+        $fromInverse = $tag->posts()->wherePivot('priority', 99)->get();
+
+        $this->assertCount(
+            1,
+            $fromInverse,
+            'updateExistingPivot must also flush the inverse BelongsToMany on the related model',
+        );
+    }
 }

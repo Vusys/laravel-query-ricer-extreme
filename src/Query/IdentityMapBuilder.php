@@ -1414,13 +1414,19 @@ class IdentityMapBuilder extends Builder
     }
 
     /**
+     * incrementEach / decrementEach are declared only on the underlying Query
+     * Builder in some Laravel versions (Eloquent\Builder picks them up via
+     * __call). Routing through toBase() lets us flush regardless of where the
+     * method lives, and avoids the `#[\Override]` attribute fataling on
+     * Laravel versions that don't expose them on the parent class.
+     *
      * @param  array<string, float|int|numeric-string>  $columns
      * @param  array<string, mixed>  $extra
      */
     #[\Override]
     public function incrementEach(array $columns, array $extra = []): int
     {
-        $result = parent::incrementEach($columns, $extra);
+        $result = $this->toBase()->incrementEach($columns, $this->addUpdatedAtColumn($extra));
         $this->flushAfterBulkWrite();
 
         return $result;
@@ -1433,7 +1439,7 @@ class IdentityMapBuilder extends Builder
     #[\Override]
     public function decrementEach(array $columns, array $extra = []): int
     {
-        $result = parent::decrementEach($columns, $extra);
+        $result = $this->toBase()->decrementEach($columns, $this->addUpdatedAtColumn($extra));
         $this->flushAfterBulkWrite();
 
         return $result;

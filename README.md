@@ -417,6 +417,20 @@ The `IDENTITY_MAP_MODE` environment variable may be used to override the config 
 
 The set of optimizations the package performs — primary-key reuse, key-set rewriting, unique-key lookup, coverage, the relation graph, and `whereHas` rewriting — is not individually configurable; they are always on. Disable per query with `->withoutIdentityMap()` or per scope with `IdentityMap::disabled(...)`.
 
+#### Upgrade note: `attribute_truth` → `mode`
+
+Earlier pre-1.0 builds read the toggle from a config key named `attribute_truth` (env var `IDENTITY_MAP_ATTRIBUTE_TRUTH`) with values `database_only` / `process_truth`. That key never appeared in the published config file, so most installs never set it. It has been renamed to `mode` (env var `IDENTITY_MAP_MODE`) with values `default` / `process_truth`.
+
+The old key is **not** read anymore: installs that still have `attribute_truth` set will silently fall back to the new default (`mode = default`). To retain previous behaviour:
+
+| Old | New |
+|---|---|
+| `'attribute_truth' => 'database_only'` (or unset) | `'mode' => 'default'` (or unset) |
+| `'attribute_truth' => 'process_truth'` | `'mode' => 'process_truth'` |
+| `IDENTITY_MAP_ATTRIBUTE_TRUTH=process_truth` | `IDENTITY_MAP_MODE=process_truth` |
+
+If you published the config, re-publish (or delete `attribute_truth` and add `mode`) and update any `.env` references. If you never published the config, only the environment variable rename matters.
+
 ### Lifecycle hooks and automatic flushing
 
 The store and coverage registry are flushed automatically at scope boundaries to prevent stale data from leaking between independent units of work.
