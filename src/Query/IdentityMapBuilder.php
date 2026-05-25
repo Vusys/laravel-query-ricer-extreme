@@ -252,7 +252,7 @@ class IdentityMapBuilder extends Builder
             $sqlKeys = $unknownKeys;
 
             if ($extraPredicateNodes !== []) {
-                $evaluator = new PredicateEvaluator;
+                $evaluator = PredicateEvaluator::forModel($model);
                 $predicate = new AndNode($extraPredicateNodes);
                 $processTruth = $this->isProcessTruth();
 
@@ -383,7 +383,7 @@ class IdentityMapBuilder extends Builder
 
             if ($uniqueEntry instanceof IdentityEntry && $uniqueEntry->state === LifecycleState::Exists && $uniqueEntry->attributes->satisfies($columns)) {
                 if ($extraNodes !== []) {
-                    $evaluator = new PredicateEvaluator;
+                    $evaluator = PredicateEvaluator::forModel($model);
                     $evalResult = $evaluator->evaluate($uniqueEntry->attributes, new AndNode($extraNodes), $processTruth);
 
                     if ($evalResult === EvaluationResult::Reject) {
@@ -561,7 +561,7 @@ class IdentityMapBuilder extends Builder
 
         if ($entry instanceof IdentityEntry && $entry->state === LifecycleState::Exists) {
             if ($extraNodes !== []) {
-                $evaluator = new PredicateEvaluator;
+                $evaluator = PredicateEvaluator::forModel($model);
                 $evalResult = $evaluator->evaluate($entry->attributes, new AndNode($extraNodes), $processTruth);
 
                 if ($evalResult === EvaluationResult::Reject) {
@@ -1065,7 +1065,7 @@ class IdentityMapBuilder extends Builder
         $result = parent::update($values);
 
         if ($predicate instanceof PredicateNode) {
-            $hadEvictions = $store->applyMassUpdate($modelClass, $predicate, $values, new PredicateEvaluator);
+            $hadEvictions = $store->applyMassUpdate($modelClass, $predicate, $values, PredicateEvaluator::forModel($this->getModel()));
             if ($hadEvictions) {
                 $registry->flushModelClass($modelClass);
             } else {
@@ -1097,7 +1097,7 @@ class IdentityMapBuilder extends Builder
         $result = parent::delete();
 
         if ($predicate instanceof PredicateNode) {
-            $store->applyMassDelete($modelClass, $predicate, new PredicateEvaluator, $usesSoftDeletes);
+            $store->applyMassDelete($modelClass, $predicate, PredicateEvaluator::forModel($this->getModel()), $usesSoftDeletes);
         } else {
             $store->flush($modelClass);
         }
@@ -1174,7 +1174,7 @@ class IdentityMapBuilder extends Builder
         }
 
         $pkName = $model->getKeyName();
-        $evaluator = new PredicateEvaluator;
+        $evaluator = PredicateEvaluator::forModel($model);
         $processTruth = $this->isProcessTruth();
         $result = [];
 
