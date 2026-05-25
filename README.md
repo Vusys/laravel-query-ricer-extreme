@@ -33,11 +33,11 @@ A scoped Eloquent identity map, process-truth engine, and query-elision planner 
   - [Attribute knowledge](#attribute-knowledge)
   - [Unique-key index](#unique-key-index)
   - [Coverage: CoverageRegistry and SubsetChecker](#coverage-coverageregistry-and-subsetchecker)
-  - [Optimization modes](#optimization-modes)
+  - [Modes](#modes)
   - [Lifecycle hooks and automatic flushing](#lifecycle-hooks-and-automatic-flushing)
   - [Mass writes](#mass-writes)
   - [Memory limits](#memory-limits)
-  - [Observability: explain() and debug logging](#observability-explain-and-debug-logging)
+  - [Observability: explain()](#observability-explain)
 - [Test suite](#test-suite)
   - [Overview](#overview)
   - [Unit tests](#unit-tests)
@@ -132,7 +132,7 @@ User::where('active', true)->get();  // loads all active users; coverage recorde
 User::where('active', true)->where('role', 'admin')->get();  // no SQL — subset answered from memory
 ```
 
-**process_truth** (`attribute_truth = 'process_truth'` in config) — unsaved in-memory attribute changes are treated as authoritative:
+**process_truth** (`mode = 'process_truth'` in config) — unsaved in-memory attribute changes are treated as authoritative:
 
 ```php
 $user->active = false;  // dirty, not yet saved
@@ -252,7 +252,7 @@ $explanations = IdentityMap::explain(fn () => User::whereKey([1, 2, 3])->where('
 // SQL executed: yes
 ```
 
-For more detail on the fields returned, see [Observability: explain() and debug logging](#observability-explain-and-debug-logging).
+For more detail on the fields returned, see [Observability: explain()](#observability-explain).
 
 ### Supported in-memory predicates
 
@@ -404,28 +404,32 @@ When a subsequent query arrives, `SubsetChecker` tests whether the new query's p
 
 Coverage entries are invalidated conservatively. When a model is saved, the registry flushes any coverage entries whose predicate region references columns that were changed. When a model is created or deleted, the entire coverage for that model class is flushed, since a new row could fall into any previously-recorded region.
 
-### Optimization modes
+### Modes
 
-The `mode` config key controls how aggressively the package serves queries from memory. Each level is a strict superset of the one before it.
+The `mode` config key controls a single behavioural switch: whether dirty in-memory attributes affect predicate evaluation.
 
-| Mode | What it unlocks | Default? |
+| Mode | What it does | Default? |
 |---|---|---|
-| `identity` | Exact primary-key reuse: `find(1)` returns the cached instance with zero SQL. | |
-| `primary_key_rewrite` | Everything in `identity`, plus key-set rewriting: `whereKey([1,2,3])` splits known/unknown keys, merges results. | **yes** |
-| `predicate` | Everything above, plus AND-predicate evaluation against known attributes for key-set queries. | |
-| `unique_key` | Everything above, plus `where('email', ...)->first()` served from the secondary unique-key index. | |
-| `coverage` | Everything above, plus whole query regions answered from memory when all matching models are loaded. | |
+| `default` | Predicates evaluate against the last-committed (original) attribute value. Dirty mutations are ignored until `save()`. | **yes** |
+| `process_truth` | Predicates evaluate against the current in-memory value, which may be dirty. The unique-key index path is bypassed under this mode, since the index is keyed on original values. | |
 
 The `IDENTITY_MAP_MODE` environment variable may be used to override the config value without republishing.
 
-**process_truth** is a separate setting controlled by a different config key. It is not a value of `mode`. Enable it by setting `attribute_truth` in the published config:
+The set of optimizations the package performs — primary-key reuse, key-set rewriting, unique-key lookup, coverage, the relation graph, and `whereHas` rewriting — is not individually configurable; they are always on. Disable per query with `->withoutIdentityMap()` or per scope with `IdentityMap::disabled(...)`.
 
-```php
-// config/query-ricer-extreme.php
-'attribute_truth' => 'process_truth',
-```
+#### Upgrade note: `attribute_truth` → `mode`
 
-When enabled, predicate evaluation uses the current in-memory attribute value (which may be dirty) rather than the original committed value. The unique-key index path is bypassed entirely under this setting, since the index is keyed on original values.
+Earlier pre-1.0 builds read the toggle from a config key named `attribute_truth` (env var `IDENTITY_MAP_ATTRIBUTE_TRUTH`) with values `database_only` / `process_truth`. That key never appeared in the published config file, so most installs never set it. It has been renamed to `mode` (env var `IDENTITY_MAP_MODE`) with values `default` / `process_truth`.
+
+The old key is **not** read anymore: installs that still have `attribute_truth` set will silently fall back to the new default (`mode = default`). To retain previous behaviour:
+
+| Old | New |
+|---|---|
+| `'attribute_truth' => 'database_only'` (or unset) | `'mode' => 'default'` (or unset) |
+| `'attribute_truth' => 'process_truth'` | `'mode' => 'process_truth'` |
+| `IDENTITY_MAP_ATTRIBUTE_TRUTH=process_truth` | `IDENTITY_MAP_MODE=process_truth` |
+
+If you published the config, re-publish (or delete `attribute_truth` and add `mode`) and update any `.env` references. If you never published the config, only the environment variable rename matters.
 
 ### Lifecycle hooks and automatic flushing
 
@@ -461,18 +465,16 @@ Eviction triggers a coverage flush for the model class, since any previously-rec
 
 ### Memory limits
 
-Four hard limits prevent unbounded memory growth. When any limit is reached, the affected path falls through to SQL with no error or exception raised.
+Only the identity graph has hard caps that the package enforces today; the identity-map store and coverage registry rely on scope flushing (HTTP terminate, queue job boundaries, transaction rollback) to bound their footprint within the lifetime of a single request or job.
 
 | Config key | Default | Env override |
 |---|---|---|
-| `limits.max_models_per_class` | 1000 | `IDENTITY_MAP_MAX_MODELS_PER_CLASS` |
-| `limits.max_total_models` | 10000 | `IDENTITY_MAP_MAX_TOTAL_MODELS` |
-| `limits.max_coverage_entries` | 1000 | `IDENTITY_MAP_MAX_COVERAGE_ENTRIES` |
-| `limits.max_rewrite_keys` | 5000 | `IDENTITY_MAP_MAX_REWRITE_KEYS` |
+| `relation_graph.max_edges` | 50000 | `IDENTITY_MAP_RELATION_GRAPH_MAX_EDGES` |
+| `relation_graph.max_coverage_entries` | 5000 | `IDENTITY_MAP_RELATION_GRAPH_MAX_COVERAGE` |
 
-Tune limits downward in memory-constrained environments or very high-throughput queue workers. Raise them when the same large model sets are repeatedly traversed within a single long-running job and the default limits are causing more SQL than expected (check with `IdentityMap::explain()`).
+When the graph exceeds either cap on a genuine insert, it is flushed entirely (the safest eviction). Tune downward in memory-constrained workers; raise when long-running jobs traverse very wide model graphs and the default flushes are causing more SQL than expected (check with `IdentityMap::explain()`).
 
-### Observability: explain() and debug logging
+### Observability: explain()
 
 `IdentityMap::explain(Closure $fn)` wraps a block of code and returns a list of `Explanation` objects — one per query that the package considered. Each object contains:
 
@@ -509,19 +511,6 @@ Tune limits downward in memory-constrained environments or very high-throughput 
 | `return_pluck_from_coverage` | `pluck()` answered from coverage registry. |
 | `return_first_from_coverage` | `first()` answered from coverage registry. |
 | `return_sole_from_coverage` | `sole()` answered from coverage registry. |
-
-Debug logging is configured separately and logs every query decision to a Laravel log channel:
-
-```php
-// config/query-ricer-extreme.php
-'debug' => [
-    'enabled' => env('IDENTITY_MAP_DEBUG', false),
-    'log_channel' => env('IDENTITY_MAP_LOG_CHANNEL'),       // null = default channel
-    'include_backtraces' => env('IDENTITY_MAP_INCLUDE_BACKTRACES', false),
-],
-```
-
-Enable debug logging in non-production environments to understand which queries are being optimized and which are falling through. `include_backtraces` adds a full stack trace to each log entry; useful for tracking down unexpected SQL but expensive in high-throughput scenarios.
 
 ---
 

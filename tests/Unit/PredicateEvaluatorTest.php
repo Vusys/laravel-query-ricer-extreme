@@ -514,4 +514,13 @@ final class PredicateEvaluatorTest extends TestCase
             '$processTruth=true must read currentValue for negated InNode',
         );
     }
+
+    #[Test]
+    public function is_process_truth_mode_returns_false_when_container_is_not_booted(): void
+    {
+        // This unit-test extends PHPUnit\Framework\TestCase directly so no
+        // Laravel container is bound. The call must not fatal trying to
+        // resolve config(); the safe default is `false`.
+        $this->assertFalse(PredicateEvaluator::isProcessTruthMode());
+    }
 }

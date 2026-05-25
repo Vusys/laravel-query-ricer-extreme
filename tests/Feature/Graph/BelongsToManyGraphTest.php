@@ -318,4 +318,49 @@ final class BelongsToManyGraphTest extends TestCase
 
         $this->assertNull($this->graph->pivotCoverageFor($identity, 'tags'));
     }
+
+    #[Test]
+    public function update_existing_pivot_invalidates_stale_pivot_attributes_in_memory(): void
+    {
+        $post = $this->postWithTags(1);
+        $tag = $post->tags->first();
+        $this->assertNotNull($tag);
+
+        // Warm: graph has pivot edge with priority = 1 (from postWithTags seed).
+        $hits = $post->tags()->wherePivot('priority', 1)->get();
+        $this->assertCount(1, $hits);
+
+        // Update the pivot row — the DB now has priority = 99 but the cached
+        // PivotEdge still holds the old value.
+        $post->tags()->updateExistingPivot($tag->id, ['priority' => 99]);
+
+        $hitsAfter = $post->tags()->wherePivot('priority', 99)->get();
+
+        $this->assertCount(1, $hitsAfter, 'updateExistingPivot must keep cached pivot attributes coherent with the DB');
+    }
+
+    #[Test]
+    public function update_existing_pivot_invalidates_inverse_side_too(): void
+    {
+        $post = $this->postWithTags(1);
+        $tag = $post->tags->first();
+        $this->assertNotNull($tag);
+
+        // Warm both sides with the *complete* set so pivot coverage is
+        // recorded on each (wherePivot filters skip coverage recording).
+        $post->tags()->get();
+        $tag->posts()->get();
+
+        // Update via the post side. The inverse (tag->posts) must also be
+        // invalidated, since both sides read the same pivot row.
+        $post->tags()->updateExistingPivot($tag->id, ['priority' => 99]);
+
+        $fromInverse = $tag->posts()->wherePivot('priority', 99)->get();
+
+        $this->assertCount(
+            1,
+            $fromInverse,
+            'updateExistingPivot must also flush the inverse BelongsToMany on the related model',
+        );
+    }
 }

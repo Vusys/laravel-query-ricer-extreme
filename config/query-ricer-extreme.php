@@ -5,23 +5,23 @@ declare(strict_types=1);
 return [
 
     /*
-     * Controls how aggressively the identity map serves queries from memory.
+     * Controls how the identity map evaluates predicates against cached models.
      *
-     *   identity            — exact primary-key identity reuse only. A second find()
-     *                         for an already-loaded id returns the cached instance with
-     *                         zero SQL.
-     *   primary_key_rewrite — everything in "identity", plus whereKey() chains are
-     *                         rewritten to return cached instances without executing SQL.
-     *   predicate           — evaluate simple WHERE predicates against known attributes
-     *                         before falling through to SQL.
-     *   unique_key          — serve positive unique-key lookups (e.g. find-by-email) from
-     *                         memory when the column is declared in 'models' below.
-     *   coverage            — answer entire query regions from memory when all matching
-     *                         models for a given scope are already loaded.
-     *   process_truth       — treat unsaved in-memory attribute changes as authoritative
-     *                         when evaluating predicates. Implies predicate mode.
+     *   default       — predicates evaluate against the last-committed attribute
+     *                   value. Dirty in-memory mutations are ignored until save().
+     *                   Safe default — never returns a row the database would not.
+     *   process_truth — predicates evaluate against the current in-memory value,
+     *                   which may be dirty. Lets pending mutations affect query
+     *                   results within the same request. The unique-key index is
+     *                   bypassed under this mode because it is keyed on original
+     *                   values; querying it with dirty values would mislead.
+     *
+     * The set of optimizations the package performs (primary-key reuse, key-set
+     * rewriting, unique-key lookup, coverage, relation graph, whereHas rewrite)
+     * is not configurable — they are always on. Disable per query with
+     * `->withoutIdentityMap()` or per scope with `IdentityMap::disabled(...)`.
      */
-    'mode' => env('IDENTITY_MAP_MODE', 'primary_key_rewrite'),
+    'mode' => env('IDENTITY_MAP_MODE', 'default'),
 
     /*
      * Per-model configuration. Declare unique column sets here to enable unique-key
@@ -45,64 +45,45 @@ return [
      * unique indexes it finds — including compound indexes — so unique-key elision
      * fires without requiring entries in 'models' above. Config-declared indexes
      * take precedence; discovery supplements them, does not replace them.
-     *
-     *   enabled            — set false to disable schema introspection entirely.
-     *   cache_per_request  — reserved; discovery is currently always cached for the
-     *                        lifetime of the request/job scope.
      */
     'schema_discovery' => [
         'enabled' => (bool) env('IDENTITY_MAP_SCHEMA_DISCOVERY', true),
-        'cache_per_request' => true,
     ],
 
     /*
      * Partial model column backfill.
      *
-     *   query_normally          — when a cached model is missing a requested column,
-     *                             execute the full original query. The map is updated
-     *                             with the wider row. Safe default — no behavioural
-     *                             change relative to earlier milestones.
-     *   backfill_missing_columns — issue a narrow SELECT for the missing columns only,
-     *                              keyed on the cached model's primary key, and merge
-     *                              the fetched columns into the existing instance.
-     *                              Dirty in-memory attributes are preserved (the merge
-     *                              only updates AttributeFact::originalValue for dirty
+     *   query_normally           — when a cached model is missing a requested
+     *                              column, execute the full original query. The
+     *                              map is updated with the wider row. Safe
+     *                              default — no behavioural change.
+     *   backfill_missing_columns — issue a narrow SELECT for the missing columns
+     *                              only, keyed on the cached model's primary key,
+     *                              and merge the fetched columns into the
+     *                              existing instance. Dirty in-memory attributes
+     *                              are preserved (the merge only updates
+     *                              AttributeFact::originalValue for dirty
      *                              columns; currentValue and the model's actual
      *                              attribute stay as the dirty value).
      *
-     * Only point lookups (find / unique-key / MemoryBelongsTo) backfill. Coverage and
-     * whereHas paths still fall through to a full SELECT when columns are missing.
+     * Only point lookups (find / unique-key / MemoryBelongsTo) backfill. Coverage
+     * and whereHas paths still fall through to a full SELECT when columns are
+     * missing.
      */
     'partial_models' => env('IDENTITY_MAP_PARTIAL_MODELS', 'query_normally'),
-
-    /*
-     * Hard memory caps. Entries beyond these limits are not cached; the query falls
-     * through to SQL. Tune downward in memory-constrained environments.
-     */
-    'limits' => [
-        'max_models_per_class' => (int) env('IDENTITY_MAP_MAX_MODELS_PER_CLASS', 1000),
-        'max_total_models' => (int) env('IDENTITY_MAP_MAX_TOTAL_MODELS', 10000),
-        'max_coverage_entries' => (int) env('IDENTITY_MAP_MAX_COVERAGE_ENTRIES', 1000),
-        'max_rewrite_keys' => (int) env('IDENTITY_MAP_MAX_REWRITE_KEYS', 5000),
-    ],
 
     /*
      * Identity graph: tracks model-to-model relation edges so that relation
      * queries can be answered from memory when coverage is complete.
      *
-     *   enabled                        — turn the graph on or off entirely.
-     *   sync_loaded_inverse_relations  — when a belongsTo association mutates,
-     *                                    keep the old/new parent's loaded
-     *                                    relation collections in sync.
+     *   enabled                          — turn the graph on or off entirely.
      *   max_edges / max_coverage_entries — hard caps; when exceeded the graph
-     *                                    is flushed entirely (safest).
+     *                                      is flushed entirely (safest).
      */
     'relation_graph' => [
         'enabled' => (bool) env('IDENTITY_MAP_RELATION_GRAPH_ENABLED', true),
-        'sync_loaded_inverse_relations' => (bool) env('IDENTITY_MAP_RELATION_GRAPH_SYNC_INVERSE', true),
         'max_edges' => (int) env('IDENTITY_MAP_RELATION_GRAPH_MAX_EDGES', 50000),
         'max_coverage_entries' => (int) env('IDENTITY_MAP_RELATION_GRAPH_MAX_COVERAGE', 5000),
-        'eviction' => 'flush_scope',
     ],
 
     /*
@@ -138,19 +119,6 @@ return [
         'pgsql' => [
             'string_comparisons' => env('IDENTITY_MAP_PGSQL_STRING_COMPARISONS', 'database_collation'),
         ],
-    ],
-
-    /*
-     * Observability and debugging. Only enable in non-production environments.
-     *
-     *   enabled            — log identity-map decisions to the configured channel.
-     *   log_channel        — Laravel log channel name (null = default channel).
-     *   include_backtraces — attach a stack trace to each log entry (expensive).
-     */
-    'debug' => [
-        'enabled' => (bool) env('IDENTITY_MAP_DEBUG', false),
-        'log_channel' => env('IDENTITY_MAP_LOG_CHANNEL'),
-        'include_backtraces' => (bool) env('IDENTITY_MAP_INCLUDE_BACKTRACES', false),
     ],
 
 ];

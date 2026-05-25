@@ -46,6 +46,25 @@ final class HasManyMemoryTest extends TestCase
     }
 
     #[Test]
+    public function has_many_includes_newly_created_child_after_initial_load(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        Post::create(['user_id' => $user->id, 'title' => 'P1', 'published' => true]);
+        Post::create(['user_id' => $user->id, 'title' => 'P2', 'published' => true]);
+
+        $user->load('posts');
+        $this->assertCount(2, $user->posts);
+
+        // Create a new post for the same user. The relation fact on $user's
+        // store entry still says posts is complete — but it's now stale.
+        Post::create(['user_id' => $user->id, 'title' => 'P3', 'published' => true]);
+
+        $result = $user->posts()->get();
+
+        $this->assertCount(3, $result, 'newly created child must surface on the next relation query');
+    }
+
+    #[Test]
     public function has_many_filters_in_memory_with_extra_predicate(): void
     {
         $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);

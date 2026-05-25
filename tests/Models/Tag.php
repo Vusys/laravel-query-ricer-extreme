@@ -6,6 +6,7 @@ namespace Vusys\QueryRicerExtreme\Tests\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Vusys\QueryRicerExtreme\HasIdentityMap;
 use Vusys\QueryRicerExtreme\Tests\Concerns\UsesContextConnection;
 use Vusys\QueryRicerExtreme\Tests\Factories\TagFactory;
@@ -35,5 +36,13 @@ final class Tag extends Model
     protected static function newFactory(): TagFactory
     {
         return TagFactory::new();
+    }
+
+    /** @return BelongsToMany<Post, $this> */
+    public function posts(): BelongsToMany
+    {
+        return $this->belongsToMany(Post::class)
+            ->withPivot(['active', 'priority'])
+            ->withTimestamps();
     }
 }

@@ -1290,18 +1290,27 @@ class IdentityMapBuilder extends Builder
         $graph = resolve(IdentityGraph::class);
         $modelClass = $this->getModel()::class;
 
-        $predicate = $store->isDisabled()
+        // Pre-compute the unqualified updated_at value (if any) so the cache mirror
+        // and the SQL UPDATE share the same timestamp. Eloquent's own
+        // addUpdatedAtColumn qualifies the column name (e.g. users.updated_at) which
+        // is not a valid attribute key in the identity-map facts; we have to inject
+        // it unqualified ourselves before parent::update is called.
+        $augmentedValues = $this->addUnqualifiedUpdatedAtColumn($values);
+
+        $predicate = $store->isDisabled() || $this->hasNonScalarValue($augmentedValues)
             ? null
             : (new QueryPatternExtractor($this))->extractFullPredicate();
 
-        $result = parent::update($values);
+        // parent::update sees updated_at already present and skips its own
+        // augmentation, so the SQL UPDATE uses the same timestamp we cached.
+        $result = parent::update($augmentedValues);
 
         if ($predicate instanceof PredicateNode) {
-            $hadEvictions = $store->applyMassUpdate($modelClass, $predicate, $values, PredicateEvaluator::forModel($this->getModel()));
+            $hadEvictions = $store->applyMassUpdate($modelClass, $predicate, $augmentedValues, PredicateEvaluator::forModel($this->getModel()));
             if ($hadEvictions) {
                 $registry->flushModelClass($modelClass);
             } else {
-                $registry->flushByColumns($modelClass, array_keys($values));
+                $registry->flushByColumns($modelClass, array_keys($augmentedValues));
             }
         } else {
             $store->flush($modelClass);
@@ -1311,6 +1320,278 @@ class IdentityMapBuilder extends Builder
         $graph->invalidateModelClass($modelClass);
 
         return $result;
+    }
+
+    /**
+     * @param  array<string, mixed>  $values
+     */
+    private function hasNonScalarValue(array $values): bool
+    {
+        foreach ($values as $val) {
+            if ($val !== null && ! is_scalar($val)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  array<string, mixed>  $values
+     * @return array<string, mixed>
+     */
+    private function addUnqualifiedUpdatedAtColumn(array $values): array
+    {
+        $model = $this->getModel();
+
+        if (! $model->usesTimestamps()) {
+            return $values;
+        }
+
+        $column = $model->getUpdatedAtColumn();
+
+        if (! is_string($column) || array_key_exists($column, $values)) {
+            return $values;
+        }
+
+        $timestamp = $model->freshTimestampString();
+
+        if (
+            $model->hasSetMutator($column)
+            || $model->hasAttributeSetMutator($column)
+            || $model->hasCast($column)
+        ) {
+            $applied = $model->newInstance()->forceFill([$column => $timestamp])->getAttributes()[$column] ?? null;
+            if (is_string($applied) || is_int($applied) || is_float($applied) || is_bool($applied)) {
+                $timestamp = $applied;
+            }
+        }
+
+        return [$column => $timestamp] + $values;
+    }
+
+    /**
+     * Increment, decrement, and upsert bypass model events and may touch rows the
+     * cache cannot reason about (the predicate can match entries we don't have
+     * loaded, or upsert may insert wholly new rows under unique keys we already
+     * indexed). The conservative choice is to flush the cache for the affected
+     * model class after the SQL ran.
+     */
+    private function flushAfterBulkWrite(): void
+    {
+        $modelClass = $this->getModel()::class;
+        resolve(IdentityMapStore::class)->flush($modelClass);
+        resolve(CoverageRegistry::class)->flushModelClass($modelClass);
+        resolve(IdentityGraph::class)->invalidateModelClass($modelClass);
+    }
+
+    /**
+     * @param  string|Expression  $column
+     * @param  float|int  $amount
+     * @param  array<string, mixed>  $extra
+     */
+    #[\Override]
+    public function increment($column, $amount = 1, array $extra = []): int
+    {
+        $result = parent::increment($column, $amount, $extra);
+        $this->flushAfterBulkWrite();
+
+        return $result;
+    }
+
+    /**
+     * @param  string|Expression  $column
+     * @param  float|int  $amount
+     * @param  array<string, mixed>  $extra
+     */
+    #[\Override]
+    public function decrement($column, $amount = 1, array $extra = []): int
+    {
+        $result = parent::decrement($column, $amount, $extra);
+        $this->flushAfterBulkWrite();
+
+        return $result;
+    }
+
+    /**
+     * incrementEach / decrementEach are declared only on the underlying Query
+     * Builder in some Laravel versions (Eloquent\Builder picks them up via
+     * __call). Routing through toBase() lets us flush regardless of where the
+     * method lives, and avoids the `#[\Override]` attribute fataling on
+     * Laravel versions that don't expose them on the parent class. Same goes
+     * for the other write paths we override on this class — Rector's
+     * AddOverrideAttributeToOverriddenMethodsRector is skipped for this file
+     * in rector.php precisely to keep the matrix green.
+     *
+     * @param  array<string, float|int|numeric-string>  $columns
+     * @param  array<string, mixed>  $extra
+     */
+    public function incrementEach(array $columns, array $extra = []): int
+    {
+        $result = $this->toBase()->incrementEach($columns, $this->addUpdatedAtColumn($extra));
+        $this->flushAfterBulkWrite();
+
+        return $result;
+    }
+
+    /**
+     * @param  array<string, float|int|numeric-string>  $columns
+     * @param  array<string, mixed>  $extra
+     */
+    public function decrementEach(array $columns, array $extra = []): int
+    {
+        $result = $this->toBase()->decrementEach($columns, $this->addUpdatedAtColumn($extra));
+        $this->flushAfterBulkWrite();
+
+        return $result;
+    }
+
+    /**
+     * @param  array<int|string, mixed>  $values
+     * @param  array<int, string>|string  $uniqueBy
+     * @param  array<int, string>|null  $update
+     */
+    #[\Override]
+    public function upsert(array $values, $uniqueBy, $update = null): int
+    {
+        $result = parent::upsert($values, $uniqueBy, $update);
+        $this->flushAfterBulkWrite();
+
+        return $result;
+    }
+
+    /**
+     * Bulk raw insert paths bypass Eloquent model events, so HasIdentityMap's
+     * saved hook never fires and previously-recorded coverage / graph entries
+     * stay believing they're complete. We can't see the inserted rows in
+     * advance, so the safest response is to flush the cache for the model
+     * class once the SQL has run.
+     *
+     * These methods exist only on the underlying Query Builder (Eloquent\Builder
+     * forwards via __call) so we cannot use parent::; we dispatch through the
+     * underlying query directly.
+     *
+     * insert() and insertGetId() are also called by Model::performInsert for a
+     * single new row — that path fires the saved event which adds the row to
+     * the store, so we must not flush. We distinguish by shape: a list of
+     * arrays is a true bulk insert; a flat assoc array is Model::create.
+     *
+     * @param  array<int|string, mixed>  $values
+     */
+    public function insert(array $values): bool
+    {
+        $result = $this->toBase()->insert($values);
+
+        if ($this->isBulkInsertShape($values)) {
+            $this->flushAfterBulkWrite();
+        }
+
+        return $result;
+    }
+
+    /**
+     * @param  array<int|string, mixed>  $values
+     */
+    public function insertOrIgnore(array $values): int
+    {
+        $result = $this->toBase()->insertOrIgnore($values);
+        $this->flushAfterBulkWrite();
+
+        return $result;
+    }
+
+    /**
+     * @param  array<string, mixed>  $values
+     * @param  string|null  $sequence
+     */
+    public function insertGetId(array $values, $sequence = null): int
+    {
+        $result = $this->toBase()->insertGetId($values, $sequence);
+
+        if ($this->isBulkInsertShape($values)) {
+            $this->flushAfterBulkWrite();
+        }
+
+        return $result;
+    }
+
+    /**
+     * @param  array<int, string>  $columns
+     * @param  Builder<Model>|QueryBuilder|Closure  $query
+     */
+    public function insertUsing(array $columns, $query): int
+    {
+        $result = $this->toBase()->insertUsing($columns, $query);
+        $this->flushAfterBulkWrite();
+
+        return $result;
+    }
+
+    /**
+     * Eloquent\Builder::touch dispatches to `$this->toBase()->update(...)`,
+     * which bypasses both model events and our update() override. The cache
+     * misses the new updated_at on touched rows.
+     *
+     * @param  array<int, string>|string|null  $column
+     */
+    #[\Override]
+    public function touch($column = null): int|false
+    {
+        $result = parent::touch($column);
+        $this->flushAfterBulkWrite();
+
+        return $result;
+    }
+
+    /**
+     * updateOrInsert lives only on the QueryBuilder; Eloquent\Builder forwards
+     * via __call. Its internal `$this->insert(...)` / `$this->update(...)` calls
+     * dispatch on the QueryBuilder itself, so our overrides on this class
+     * never see them. Trap the call here and flush the cache after the SQL.
+     *
+     * @param  array<string, mixed>  $attributes
+     * @param  array<string, mixed>|callable  $values
+     */
+    public function updateOrInsert(array $attributes, array|callable $values = []): bool
+    {
+        $result = $this->toBase()->updateOrInsert($attributes, $values);
+        $this->flushAfterBulkWrite();
+
+        return $result;
+    }
+
+    /**
+     * updateFrom is the PostgreSQL UPDATE … FROM variant. Same situation as
+     * updateOrInsert: lives on QueryBuilder, bypasses our overrides.
+     *
+     * @param  array<string, mixed>  $values
+     */
+    public function updateFrom(array $values): int
+    {
+        $result = $this->toBase()->updateFrom($values);
+        $this->flushAfterBulkWrite();
+
+        return $result;
+    }
+
+    /**
+     * Distinguish a true bulk insert (`Post::insert([['col' => 'v'], ...])`) from
+     * a single-row insert dispatched by Model::performInsert
+     * (`Post::create([...])` produces a flat assoc array). The QueryBuilder
+     * itself uses the same heuristic — `is_array(reset($values))` — to detect
+     * bulk shape.
+     *
+     * @param  array<int|string, mixed>  $values
+     */
+    private function isBulkInsertShape(array $values): bool
+    {
+        if ($values === []) {
+            return false;
+        }
+
+        $first = reset($values);
+
+        return is_array($first);
     }
 
     #[\Override]
@@ -1616,7 +1897,7 @@ class IdentityMapBuilder extends Builder
 
     private function isProcessTruth(): bool
     {
-        return config('query-ricer-extreme.attribute_truth', 'database_only') === 'process_truth';
+        return PredicateEvaluator::isProcessTruthMode();
     }
 
     /**
@@ -1772,7 +2053,13 @@ class IdentityMapBuilder extends Builder
             return EvaluationResult::Reject;
         }
 
-        return $evaluator->evaluate($parentEntry->attributes, $innerPredicate);
+        $processTruth = $this->isProcessTruth();
+
+        if ($processTruth) {
+            $parentEntry->attributes->syncFromModel($parentEntry->model);
+        }
+
+        return $evaluator->evaluate($parentEntry->attributes, $innerPredicate, $processTruth);
     }
 
     private function evaluateChildrenHas(
@@ -1795,6 +2082,7 @@ class IdentityMapBuilder extends Builder
 
         $connection = $related->getConnectionName() ?? 'default';
         $fingerprint = ScopeFingerprinter::fromModel($related);
+        $processTruth = $this->isProcessTruth();
         $hasUnknown = false;
 
         foreach ($coverage->childPrimaryKeys as $pk) {
@@ -1811,7 +2099,11 @@ class IdentityMapBuilder extends Builder
                 return EvaluationResult::Unknown;
             }
 
-            $childResult = $evaluator->evaluate($childEntry->attributes, $rewrite->innerPredicate);
+            if ($processTruth) {
+                $childEntry->attributes->syncFromModel($childEntry->model);
+            }
+
+            $childResult = $evaluator->evaluate($childEntry->attributes, $rewrite->innerPredicate, $processTruth);
 
             if ($childResult === EvaluationResult::Match) {
                 return EvaluationResult::Match;

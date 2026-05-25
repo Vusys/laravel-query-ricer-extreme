@@ -63,6 +63,27 @@ final readonly class PredicateEvaluator
         );
     }
 
+    /**
+     * Returns true when the configured mode is `process_truth`, indicating that
+     * predicate evaluation should read dirty in-memory attribute values instead
+     * of the last-committed originals.
+     *
+     * Mirrors the availability check in {@see self::forModel()} so callers in
+     * bootless contexts (pure-unit tests, console tooling that hasn't booted
+     * the framework) don't fatal trying to resolve `config()`. Absent the
+     * container, the safe default is `false`.
+     */
+    public static function isProcessTruthMode(): bool
+    {
+        $app = function_exists('app') ? app() : null;
+
+        if ($app === null || ! $app->bound('config')) {
+            return false;
+        }
+
+        return config('query-ricer-extreme.mode', 'default') === 'process_truth';
+    }
+
     public function evaluate(AttributeKnowledge $attributes, PredicateNode $node, bool $processTruth = false): EvaluationResult
     {
         return match (true) {

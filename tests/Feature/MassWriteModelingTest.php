@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Vusys\QueryRicerExtreme\Tests\Feature;
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Sleep;
 use PHPUnit\Framework\Attributes\Test;
 use Vusys\QueryRicerExtreme\Coverage\CoverageRegistry;
 use Vusys\QueryRicerExtreme\Predicate\AndNode;
@@ -12,6 +13,7 @@ use Vusys\QueryRicerExtreme\Predicate\ComparisonNode;
 use Vusys\QueryRicerExtreme\Predicate\PredicateEvaluator;
 use Vusys\QueryRicerExtreme\Store\IdentityMapStore;
 use Vusys\QueryRicerExtreme\Tests\Models\Post;
+use Vusys\QueryRicerExtreme\Tests\Models\Tag;
 use Vusys\QueryRicerExtreme\Tests\Models\User;
 use Vusys\QueryRicerExtreme\Tests\TestCase;
 
@@ -638,5 +640,222 @@ final class MassWriteModelingTest extends TestCase
         // name='Alice' entry flushed by HasIdentityMap::saved line 75; active=true preserved.
         $this->assertSame(1, $this->registry->entryCount(),
             'Only the coverage entry referencing name must be flushed');
+    }
+
+    // =========================================================================
+    // Non-scalar update values (DB::raw, etc.) must fall through to a safe flush
+    // rather than caching the Expression as the new column value.
+    // =========================================================================
+
+    #[Test]
+    public function mass_update_with_db_raw_expression_evicts_entries(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'score' => 10]);
+        User::find($alice->id); // warm entry
+
+        $this->assertSame(1, $this->store->debugStats()['entries']);
+
+        User::where('score', 10)->update(['score' => DB::raw('score + 1')]);
+
+        $aliceAfter = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $aliceAfter);
+        $this->assertSame(11, (int) $aliceAfter->score, 'cache must not retain a DB::raw Expression as the column value');
+    }
+
+    #[Test]
+    public function mass_increment_invalidates_cached_entries(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'score' => 10]);
+        User::find($alice->id); // warm entry
+
+        User::where('id', $alice->id)->increment('score');
+
+        $aliceAfter = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $aliceAfter);
+        $this->assertSame(11, (int) $aliceAfter->score, 'cache must reflect the incremented value');
+    }
+
+    #[Test]
+    public function mass_decrement_invalidates_cached_entries(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'score' => 10]);
+        User::find($alice->id);
+
+        User::where('id', $alice->id)->decrement('score', 3);
+
+        $aliceAfter = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $aliceAfter);
+        $this->assertSame(7, (int) $aliceAfter->score);
+    }
+
+    #[Test]
+    public function mass_increment_each_invalidates_cached_entries(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'score' => 10]);
+        User::find($alice->id);
+
+        User::where('id', $alice->id)->incrementEach(['score' => 5]);
+
+        $aliceAfter = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $aliceAfter);
+        $this->assertSame(15, (int) $aliceAfter->score);
+    }
+
+    #[Test]
+    public function mass_decrement_each_invalidates_cached_entries(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'score' => 10]);
+        User::find($alice->id);
+
+        User::where('id', $alice->id)->decrementEach(['score' => 4]);
+
+        $aliceAfter = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $aliceAfter);
+        $this->assertSame(6, (int) $aliceAfter->score);
+    }
+
+    #[Test]
+    public function update_or_insert_invalidates_cache(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'score' => 10]);
+        User::find($alice->id); // warm entry
+
+        User::query()->updateOrInsert(
+            ['email' => 'alice@example.com'],
+            ['score' => 77],
+        );
+
+        $aliceAfter = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $aliceAfter);
+        $this->assertSame(77, (int) $aliceAfter->score, 'cache must reflect the updateOrInsert');
+    }
+
+    #[Test]
+    public function builder_touch_invalidates_cached_updated_at(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        User::find($alice->id);
+
+        $originalUpdatedAt = (string) $alice->updated_at;
+        Sleep::sleep(1);
+
+        User::where('id', $alice->id)->touch();
+
+        $aliceAfter = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $aliceAfter);
+        $fromDb = User::withoutIdentityMap()->find($alice->id);
+        $this->assertInstanceOf(User::class, $fromDb);
+        $this->assertNotSame($originalUpdatedAt, (string) $fromDb->updated_at, 'DB updated_at must have advanced');
+        $this->assertSame(
+            (string) $fromDb->updated_at,
+            (string) $aliceAfter->updated_at,
+            'cached updated_at must match the SQL UPDATE issued by Builder::touch()',
+        );
+    }
+
+    #[Test]
+    public function insert_or_ignore_invalidates_coverage_for_model_class(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        Post::create(['user_id' => $alice->id, 'title' => 'P1', 'published' => true]);
+
+        // Warm coverage.
+        $coveredBefore = Post::where('published', true)->get();
+        $this->assertCount(1, $coveredBefore);
+
+        Post::insertOrIgnore([
+            ['user_id' => $alice->id, 'title' => 'P2', 'published' => true, 'view_count' => 0],
+        ]);
+
+        $coveredAfter = Post::where('published', true)->get();
+        $this->assertCount(2, $coveredAfter, 'coverage must be invalidated by insertOrIgnore');
+    }
+
+    #[Test]
+    public function insert_using_invalidates_coverage_for_model_class(): void
+    {
+        // Seed a Tag we can mirror into Post via insertUsing.
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        Tag::create(['name' => 'tagA', 'priority' => 1]);
+        Post::create(['user_id' => $alice->id, 'title' => 'P-existing', 'published' => true]);
+
+        $coveredBefore = Post::where('published', true)->get();
+        $this->assertCount(1, $coveredBefore);
+
+        // Use insertUsing to add a row sourced from another query.
+        Post::insertUsing(
+            ['user_id', 'title', 'published', 'view_count', 'created_at', 'updated_at'],
+            fn ($q) => $q->from('tags')->selectRaw('? as user_id, name as title, true as published, 0 as view_count, ? as created_at, ? as updated_at', [
+                $alice->id, now()->toDateTimeString(), now()->toDateTimeString(),
+            ]),
+        );
+
+        $coveredAfter = Post::where('published', true)->get();
+        $this->assertCount(2, $coveredAfter, 'coverage must be invalidated by insertUsing');
+    }
+
+    #[Test]
+    public function insert_invalidates_coverage_for_model_class(): void
+    {
+        // Pre-warm coverage: AND([]) over Post with PKs from the seeded rows.
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        Post::create(['user_id' => $alice->id, 'title' => 'P1', 'published' => true]);
+        $countBefore = Post::count();
+        $this->assertSame(1, $countBefore);
+
+        // Warm coverage region (Post::all-equivalent).
+        $coveredBefore = Post::where('published', true)->get();
+        $this->assertCount(1, $coveredBefore);
+
+        // Raw insert via Eloquent Builder — no model events fire.
+        Post::insert([
+            ['user_id' => $alice->id, 'title' => 'P2', 'published' => true, 'view_count' => 0],
+        ]);
+
+        // The new row must appear in the next query, not the stale coverage list.
+        $coveredAfter = Post::where('published', true)->get();
+        $this->assertCount(2, $coveredAfter, 'coverage must be invalidated by raw insert');
+    }
+
+    #[Test]
+    public function upsert_invalidates_cached_entries_for_overlapping_rows(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'score' => 10]);
+        User::find($alice->id);
+
+        User::upsert(
+            [['name' => 'Alice', 'email' => 'alice@example.com', 'score' => 99]],
+            ['email'],
+            ['score'],
+        );
+
+        $aliceAfter = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $aliceAfter);
+        $this->assertSame(99, (int) $aliceAfter->score, 'cache must reflect the upserted score');
+    }
+
+    #[Test]
+    public function mass_update_keeps_cached_updated_at_in_sync_with_database(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => false]);
+        User::find($alice->id); // warm entry
+
+        $originalUpdatedAt = (string) $alice->updated_at;
+        Sleep::sleep(1); // ensure freshTimestampString changes
+
+        User::where('active', false)->update(['active' => true]);
+
+        $aliceAfter = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $aliceAfter);
+
+        $fromDb = User::withoutIdentityMap()->find($alice->id);
+        $this->assertInstanceOf(User::class, $fromDb);
+
+        $this->assertNotSame($originalUpdatedAt, (string) $fromDb->updated_at, 'DB updated_at must have advanced');
+        $this->assertSame(
+            (string) $fromDb->updated_at,
+            (string) $aliceAfter->updated_at,
+            'cache updated_at must match the SQL UPDATE that just ran',
+        );
     }
 }

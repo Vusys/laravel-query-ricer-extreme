@@ -21,6 +21,8 @@ use Vusys\QueryRicerExtreme\Tests\Factories\UserFactory;
  * @property bool $active
  * @property int|null $score
  * @property string|null $bio
+ * @property Carbon|null $created_at
+ * @property Carbon|null $updated_at
  * @property Carbon|null $deleted_at
  */
 final class User extends Model

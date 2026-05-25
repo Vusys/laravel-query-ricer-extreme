@@ -45,6 +45,23 @@ final class MorphManyMemoryTest extends TestCase
     }
 
     #[Test]
+    public function morph_many_includes_newly_created_child_after_initial_load(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        Comment::create(['commentable_type' => User::class, 'commentable_id' => $user->id, 'body' => 'A']);
+        Comment::create(['commentable_type' => User::class, 'commentable_id' => $user->id, 'body' => 'B']);
+
+        $user->load('comments');
+        $this->assertCount(2, $user->comments);
+
+        Comment::create(['commentable_type' => User::class, 'commentable_id' => $user->id, 'body' => 'C']);
+
+        $result = $user->comments()->get();
+
+        $this->assertCount(3, $result, 'newly created child must surface on the next morphMany query');
+    }
+
+    #[Test]
     public function morph_many_filters_in_memory_with_extra_predicate(): void
     {
         $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);

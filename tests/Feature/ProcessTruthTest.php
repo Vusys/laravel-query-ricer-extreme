@@ -7,6 +7,9 @@ namespace Vusys\QueryRicerExtreme\Tests\Feature;
 use Illuminate\Support\Facades\DB;
 use PHPUnit\Framework\Attributes\Test;
 use Vusys\QueryRicerExtreme\Store\IdentityMapStore;
+use Vusys\QueryRicerExtreme\Tests\Models\Comment;
+use Vusys\QueryRicerExtreme\Tests\Models\Post;
+use Vusys\QueryRicerExtreme\Tests\Models\Tag;
 use Vusys\QueryRicerExtreme\Tests\Models\User;
 use Vusys\QueryRicerExtreme\Tests\TestCase;
 
@@ -20,13 +23,13 @@ final class ProcessTruthTest extends TestCase
         parent::setUp();
         $this->store = resolve(IdentityMapStore::class);
         $this->store->flush();
-        config(['query-ricer-extreme.attribute_truth' => 'process_truth']);
+        config(['query-ricer-extreme.mode' => 'process_truth']);
     }
 
     #[\Override]
     protected function tearDown(): void
     {
-        config(['query-ricer-extreme.attribute_truth' => 'database_only']);
+        config(['query-ricer-extreme.mode' => 'default']);
         parent::tearDown();
     }
 
@@ -109,13 +112,13 @@ final class ProcessTruthTest extends TestCase
     }
 
     // -----------------------------------------------------------------------
-    // database_only mode — dirty changes must NOT affect evaluation
+    // default mode — dirty changes must NOT affect evaluation
     // -----------------------------------------------------------------------
 
     #[Test]
-    public function database_only_mode_ignores_dirty_changes(): void
+    public function default_mode_ignores_dirty_changes(): void
     {
-        config(['query-ricer-extreme.attribute_truth' => 'database_only']);
+        config(['query-ricer-extreme.mode' => 'default']);
 
         $alice = $this->createFresh('Alice', 'alice@example.com', active: true);
 
@@ -131,7 +134,7 @@ final class ProcessTruthTest extends TestCase
         $result = User::whereKey([$alice->id])->where('active', true)->get();
 
         $this->assertSame(0, $queryCount, 'Original value is true — no SQL needed');
-        $this->assertCount(1, $result, 'database_only: original value used, dirty ignored');
+        $this->assertCount(1, $result, 'default mode: original value used, dirty ignored');
     }
 
     // -----------------------------------------------------------------------
@@ -254,9 +257,9 @@ final class ProcessTruthTest extends TestCase
     }
 
     #[Test]
-    public function database_only_mode_ignores_dirty_in_coverage_filter(): void
+    public function default_mode_ignores_dirty_in_coverage_filter(): void
     {
-        config(['query-ricer-extreme.attribute_truth' => 'database_only']);
+        config(['query-ricer-extreme.mode' => 'default']);
 
         $alice = $this->createFresh('Alice', 'alice@example.com', active: true);
         $this->createFresh('Bob', 'bob@example.com', active: true);
@@ -275,7 +278,7 @@ final class ProcessTruthTest extends TestCase
         $result = User::where('active', true)->get();
 
         $this->assertSame(0, $queryCount, 'Coverage hit — no SQL');
-        $this->assertCount(2, $result, 'database_only: dirty mutation ignored, both models returned');
+        $this->assertCount(2, $result, 'default mode: dirty mutation ignored, both models returned');
     }
 
     // -----------------------------------------------------------------------
@@ -427,5 +430,155 @@ final class ProcessTruthTest extends TestCase
 
         $this->assertSame(0, $queryCount, 'Dirty name not in original list — match via process-truth');
         $this->assertCount(1, $result);
+    }
+
+    // -----------------------------------------------------------------------
+    // Relation filtering — process_truth must apply when filtering loaded
+    // hasMany / morphMany / belongsToMany collections in memory.
+    // -----------------------------------------------------------------------
+
+    #[Test]
+    public function has_many_in_memory_filter_respects_dirty_value(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        $post1 = Post::create(['user_id' => $alice->id, 'title' => 'P1', 'published' => true]);
+        Post::create(['user_id' => $alice->id, 'title' => 'P2', 'published' => true]);
+        $this->store->flush();
+
+        $aliceLive = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $aliceLive);
+        $aliceLive->load('posts');
+
+        $dirtyPost = $aliceLive->posts->firstWhere('id', $post1->id);
+        $this->assertInstanceOf(Post::class, $dirtyPost);
+        $dirtyPost->published = false;
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $published = $aliceLive->posts()->where('published', true)->get();
+
+        $this->assertSame(0, $queryCount, 'hasMany filter must run in memory');
+        $this->assertCount(1, $published, 'process_truth: dirty post excluded from published=true');
+        $this->assertNotContains($post1->id, $published->pluck('id')->all());
+    }
+
+    #[Test]
+    public function morph_many_in_memory_filter_respects_dirty_value(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        $c1 = Comment::create(['commentable_type' => User::class, 'commentable_id' => $alice->id, 'body' => 'hi', 'likes' => 5]);
+        Comment::create(['commentable_type' => User::class, 'commentable_id' => $alice->id, 'body' => 'bye', 'likes' => 10]);
+        $this->store->flush();
+
+        $aliceLive = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $aliceLive);
+        $aliceLive->load('comments');
+
+        $dirtyComment = $aliceLive->comments->firstWhere('id', $c1->id);
+        $this->assertInstanceOf(Comment::class, $dirtyComment);
+        $dirtyComment->likes = 100;
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $popular = $aliceLive->comments()->where('likes', 100)->get();
+
+        $this->assertSame(0, $queryCount, 'morphMany filter must run in memory');
+        $this->assertCount(1, $popular, 'process_truth: dirty comment matched via current likes value');
+        $this->assertSame($c1->id, $popular->first()?->id);
+    }
+
+    #[Test]
+    public function where_has_belongs_to_inner_predicate_respects_dirty_parent(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com', active: true);
+        $post = Post::create(['user_id' => $alice->id, 'title' => 'P', 'published' => true]);
+        $this->store->flush();
+
+        // Warm: Alice in store with active=true (original), Post in store.
+        $aliceLive = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $aliceLive);
+        User::find($alice->id);
+        Post::find($post->id);
+
+        // Dirty: Alice.active flipped in memory only.
+        $aliceLive->active = false;
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = Post::whereKey([$post->id])
+            ->whereHas('user', fn ($q) => $q->where('active', true))
+            ->get();
+
+        $this->assertSame(0, $queryCount, 'whereHas BelongsTo must run in memory');
+        $this->assertCount(0, $result, 'process_truth: dirty parent excluded by whereHas inner predicate');
+    }
+
+    #[Test]
+    public function where_has_has_many_inner_predicate_respects_dirty_child(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        $post = Post::create(['user_id' => $alice->id, 'title' => 'P', 'published' => true]);
+        $this->store->flush();
+
+        $aliceLive = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $aliceLive);
+        // Load posts so the graph has full coverage of Alice's children.
+        $aliceLive->load('posts');
+
+        $dirtyPost = $aliceLive->posts->firstWhere('id', $post->id);
+        $this->assertInstanceOf(Post::class, $dirtyPost);
+        $dirtyPost->published = false;
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = User::whereKey([$alice->id])
+            ->whereHas('posts', fn ($q) => $q->where('published', true))
+            ->get();
+
+        $this->assertSame(0, $queryCount, 'whereHas HasMany must run in memory');
+        $this->assertCount(0, $result, 'process_truth: dirty child excluded by whereHas inner predicate');
+    }
+
+    #[Test]
+    public function belongs_to_many_in_memory_filter_respects_dirty_related_value(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        $post = Post::create(['user_id' => $alice->id, 'title' => 'P', 'published' => true]);
+        $tagA = Tag::create(['name' => 'red', 'priority' => 5]);
+        $tagB = Tag::create(['name' => 'blue', 'priority' => 10]);
+        $post->tags()->sync([$tagA->id, $tagB->id]);
+        $this->store->flush();
+
+        $postLive = Post::find($post->id);
+        $this->assertInstanceOf(Post::class, $postLive);
+        // Force the pivot graph + related entries to be loaded.
+        $postLive->load('tags');
+
+        $tagAEntry = Tag::find($tagA->id);
+        $this->assertInstanceOf(Tag::class, $tagAEntry);
+        $tagAEntry->priority = 99;
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $hits = $postLive->tags()->where('priority', 99)->get();
+
+        $this->assertSame(0, $queryCount, 'belongsToMany filter must run in memory');
+        $this->assertCount(1, $hits, 'process_truth: dirty tag matched via current priority value');
+        $this->assertSame($tagA->id, $hits->first()?->id);
     }
 }
