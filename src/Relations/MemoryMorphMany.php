@@ -128,6 +128,7 @@ final class MemoryMorphMany extends MorphMany
 
         $predicate = new AndNode($extraNodes);
         $evaluator = PredicateEvaluator::forModel($this->related);
+        $processTruth = PredicateEvaluator::isProcessTruthMode();
         /** @var list<TRelatedModel> $filteredModels */
         $filteredModels = [];
         $hasUnknown = false;
@@ -154,7 +155,11 @@ final class MemoryMorphMany extends MorphMany
                 break;
             }
 
-            $result = $evaluator->evaluate($entry->attributes, $predicate);
+            if ($processTruth) {
+                $entry->attributes->syncFromModel($entry->model);
+            }
+
+            $result = $evaluator->evaluate($entry->attributes, $predicate, $processTruth);
 
             if ($result === EvaluationResult::Match) {
                 /** @var TRelatedModel $typed */
@@ -491,6 +496,7 @@ final class MemoryMorphMany extends MorphMany
 
         $predicate = new AndNode($extraNodes);
         $evaluator = PredicateEvaluator::forModel($this->related);
+        $processTruth = PredicateEvaluator::isProcessTruthMode();
         $filtered = [];
 
         foreach ($children as $child) {
@@ -500,7 +506,11 @@ final class MemoryMorphMany extends MorphMany
                 return null;
             }
 
-            $result = $evaluator->evaluate($entry->attributes, $predicate);
+            if ($processTruth) {
+                $entry->attributes->syncFromModel($entry->model);
+            }
+
+            $result = $evaluator->evaluate($entry->attributes, $predicate, $processTruth);
 
             if ($result === EvaluationResult::Unknown) {
                 return null;

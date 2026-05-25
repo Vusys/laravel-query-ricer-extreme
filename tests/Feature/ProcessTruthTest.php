@@ -7,6 +7,9 @@ namespace Vusys\QueryRicerExtreme\Tests\Feature;
 use Illuminate\Support\Facades\DB;
 use PHPUnit\Framework\Attributes\Test;
 use Vusys\QueryRicerExtreme\Store\IdentityMapStore;
+use Vusys\QueryRicerExtreme\Tests\Models\Comment;
+use Vusys\QueryRicerExtreme\Tests\Models\Post;
+use Vusys\QueryRicerExtreme\Tests\Models\Tag;
 use Vusys\QueryRicerExtreme\Tests\Models\User;
 use Vusys\QueryRicerExtreme\Tests\TestCase;
 
@@ -427,5 +430,97 @@ final class ProcessTruthTest extends TestCase
 
         $this->assertSame(0, $queryCount, 'Dirty name not in original list — match via process-truth');
         $this->assertCount(1, $result);
+    }
+
+    // -----------------------------------------------------------------------
+    // Relation filtering — process_truth must apply when filtering loaded
+    // hasMany / morphMany / belongsToMany collections in memory.
+    // -----------------------------------------------------------------------
+
+    #[Test]
+    public function has_many_in_memory_filter_respects_dirty_value(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        $post1 = Post::create(['user_id' => $alice->id, 'title' => 'P1', 'published' => true]);
+        Post::create(['user_id' => $alice->id, 'title' => 'P2', 'published' => true]);
+        $this->store->flush();
+
+        $aliceLive = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $aliceLive);
+        $aliceLive->load('posts');
+
+        $dirtyPost = $aliceLive->posts->firstWhere('id', $post1->id);
+        $this->assertInstanceOf(Post::class, $dirtyPost);
+        $dirtyPost->published = false;
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $published = $aliceLive->posts()->where('published', true)->get();
+
+        $this->assertSame(0, $queryCount, 'hasMany filter must run in memory');
+        $this->assertCount(1, $published, 'process_truth: dirty post excluded from published=true');
+        $this->assertNotContains($post1->id, $published->pluck('id')->all());
+    }
+
+    #[Test]
+    public function morph_many_in_memory_filter_respects_dirty_value(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        $c1 = Comment::create(['commentable_type' => User::class, 'commentable_id' => $alice->id, 'body' => 'hi', 'likes' => 5]);
+        Comment::create(['commentable_type' => User::class, 'commentable_id' => $alice->id, 'body' => 'bye', 'likes' => 10]);
+        $this->store->flush();
+
+        $aliceLive = User::find($alice->id);
+        $this->assertInstanceOf(User::class, $aliceLive);
+        $aliceLive->load('comments');
+
+        $dirtyComment = $aliceLive->comments->firstWhere('id', $c1->id);
+        $this->assertInstanceOf(Comment::class, $dirtyComment);
+        $dirtyComment->likes = 100;
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $popular = $aliceLive->comments()->where('likes', 100)->get();
+
+        $this->assertSame(0, $queryCount, 'morphMany filter must run in memory');
+        $this->assertCount(1, $popular, 'process_truth: dirty comment matched via current likes value');
+        $this->assertSame($c1->id, $popular->first()?->id);
+    }
+
+    #[Test]
+    public function belongs_to_many_in_memory_filter_respects_dirty_related_value(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        $post = Post::create(['user_id' => $alice->id, 'title' => 'P', 'published' => true]);
+        $tagA = Tag::create(['name' => 'red', 'priority' => 5]);
+        $tagB = Tag::create(['name' => 'blue', 'priority' => 10]);
+        $post->tags()->sync([$tagA->id, $tagB->id]);
+        $this->store->flush();
+
+        $postLive = Post::find($post->id);
+        $this->assertInstanceOf(Post::class, $postLive);
+        // Force the pivot graph + related entries to be loaded.
+        $postLive->load('tags');
+
+        $tagAEntry = Tag::find($tagA->id);
+        $this->assertInstanceOf(Tag::class, $tagAEntry);
+        $tagAEntry->priority = 99;
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $hits = $postLive->tags()->where('priority', 99)->get();
+
+        $this->assertSame(0, $queryCount, 'belongsToMany filter must run in memory');
+        $this->assertCount(1, $hits, 'process_truth: dirty tag matched via current priority value');
+        $this->assertSame($tagA->id, $hits->first()?->id);
     }
 }

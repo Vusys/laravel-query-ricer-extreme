@@ -128,6 +128,7 @@ final class MemoryHasMany extends HasMany
 
         $predicate = new AndNode($extraNodes);
         $evaluator = PredicateEvaluator::forModel($this->related);
+        $processTruth = PredicateEvaluator::isProcessTruthMode();
         /** @var list<TRelatedModel> $filteredModels */
         $filteredModels = [];
         $hasUnknown = false;
@@ -154,7 +155,11 @@ final class MemoryHasMany extends HasMany
                 break;
             }
 
-            $result = $evaluator->evaluate($entry->attributes, $predicate);
+            if ($processTruth) {
+                $entry->attributes->syncFromModel($entry->model);
+            }
+
+            $result = $evaluator->evaluate($entry->attributes, $predicate, $processTruth);
 
             if ($result === EvaluationResult::Match) {
                 /** @var TRelatedModel $typed */
@@ -473,6 +478,7 @@ final class MemoryHasMany extends HasMany
 
         $predicate = new AndNode($extraNodes);
         $evaluator = PredicateEvaluator::forModel($this->related);
+        $processTruth = PredicateEvaluator::isProcessTruthMode();
         $filtered = [];
 
         foreach ($children as $child) {
@@ -482,7 +488,11 @@ final class MemoryHasMany extends HasMany
                 return null;
             }
 
-            $result = $evaluator->evaluate($entry->attributes, $predicate);
+            if ($processTruth) {
+                $entry->attributes->syncFromModel($entry->model);
+            }
+
+            $result = $evaluator->evaluate($entry->attributes, $predicate, $processTruth);
 
             if ($result === EvaluationResult::Unknown) {
                 return null;

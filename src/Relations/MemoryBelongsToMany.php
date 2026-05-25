@@ -352,6 +352,7 @@ final class MemoryBelongsToMany extends BelongsToMany
 
         $pivotEdges = $graph->pivotEdgesFrom($parentIdentity, $relationName);
         $evaluator = PredicateEvaluator::forModel($this->related);
+        $processTruth = PredicateEvaluator::isProcessTruthMode();
         $relatedPredicate = $relatedNodes === [] ? null : new AndNode($relatedNodes);
         $pivotPredicate = $pivotNodes === [] ? null : new AndNode($pivotNodes);
         $filtered = [];
@@ -376,7 +377,11 @@ final class MemoryBelongsToMany extends BelongsToMany
             }
 
             if ($relatedPredicate instanceof AndNode) {
-                $relResult = $evaluator->evaluate($relatedEntry->attributes, $relatedPredicate);
+                if ($processTruth) {
+                    $relatedEntry->attributes->syncFromModel($relatedEntry->model);
+                }
+
+                $relResult = $evaluator->evaluate($relatedEntry->attributes, $relatedPredicate, $processTruth);
 
                 if ($relResult === EvaluationResult::Unknown) {
                     return null;

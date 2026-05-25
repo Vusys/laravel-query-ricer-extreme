@@ -63,6 +63,16 @@ final readonly class PredicateEvaluator
         );
     }
 
+    /**
+     * Returns true when the configured mode is `process_truth`, indicating that
+     * predicate evaluation should read dirty in-memory attribute values instead
+     * of the last-committed originals.
+     */
+    public static function isProcessTruthMode(): bool
+    {
+        return config('query-ricer-extreme.mode', 'default') === 'process_truth';
+    }
+
     public function evaluate(AttributeKnowledge $attributes, PredicateNode $node, bool $processTruth = false): EvaluationResult
     {
         return match (true) {

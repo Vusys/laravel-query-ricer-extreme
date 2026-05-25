@@ -1616,7 +1616,7 @@ class IdentityMapBuilder extends Builder
 
     private function isProcessTruth(): bool
     {
-        return config('query-ricer-extreme.mode', 'default') === 'process_truth';
+        return PredicateEvaluator::isProcessTruthMode();
     }
 
     /**
