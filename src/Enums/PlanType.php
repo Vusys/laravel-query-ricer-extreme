@@ -27,4 +27,6 @@ enum PlanType: string
     case ReturnMinFromCoverage = 'return_min_from_coverage';
     case ReturnMaxFromCoverage = 'return_max_from_coverage';
     case ReturnAvgFromCoverage = 'return_avg_from_coverage';
+    case WhereHasFromGraph = 'where_has_from_graph';
+    case WhereDoesntHaveFromGraph = 'where_doesnt_have_from_graph';
 }

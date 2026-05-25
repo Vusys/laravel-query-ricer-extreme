@@ -6,6 +6,7 @@ namespace Vusys\QueryRicerExtreme\Tests\Fuzz;
 
 use PHPUnit\Framework\Attributes\Group;
 use Vusys\QueryRicerExtreme\IdentityMap;
+use Vusys\QueryRicerExtreme\Tests\Models\Post;
 use Vusys\QueryRicerExtreme\Tests\Models\User;
 
 #[Group('fuzzer')]
@@ -129,6 +130,118 @@ final class QueryCorrectnessTest extends FuzzerTestCase
             );
 
             $this->assertSame($oracle, $actual, 'whereKey([...])->where(active, ...)');
+        });
+    }
+
+    /**
+     * Oracle: whereHas('posts', closure) with graph coverage must match bypassed query.
+     */
+    public function test_where_has_with_graph_coverage_matches_oracle(): void
+    {
+        $this->eachSeed(function (int $seed, int $step): void {
+            IdentityMap::flush();
+
+            // Users first, then posts (graph invalidation is per-class).
+            /** @var list<User> $users */
+            $users = [];
+            for ($i = 0, $count = mt_rand(2, 5); $i < $count; $i++) {
+                $users[] = User::factory()->create();
+            }
+
+            foreach ($users as $u) {
+                for ($i = 0, $count = mt_rand(0, 3); $i < $count; $i++) {
+                    Post::create([
+                        'user_id' => $u->id,
+                        'title' => "p{$u->id}-{$i}",
+                        'published' => (bool) mt_rand(0, 1),
+                    ]);
+                }
+            }
+
+            // Warm a random subset by loading their posts → builds graph coverage.
+            foreach ($users as $u) {
+                if (mt_rand(0, 1) === 1) {
+                    $u->load('posts');
+                }
+            }
+
+            $userIds = array_map(fn (User $u) => $u->id, $users);
+            $predicateValue = (bool) mt_rand(0, 1);
+
+            $actual = User::whereKey($userIds)
+                ->whereHas('posts', fn ($q) => $q->where('published', $predicateValue))
+                ->get()
+                ->pluck('id')
+                ->sort()
+                ->values()
+                ->all();
+
+            $oracle = IdentityMap::disabled(
+                fn () => User::whereKey($userIds)
+                    ->whereHas('posts', fn ($q) => $q->where('published', $predicateValue))
+                    ->get()
+                    ->pluck('id')
+                    ->sort()
+                    ->values()
+                    ->all()
+            );
+
+            $this->assertSame($oracle, $actual, 'whereHas should match oracle');
+        });
+    }
+
+    /**
+     * Oracle: whereDoesntHave inverts the membership semantics correctly.
+     */
+    public function test_where_doesnt_have_matches_oracle(): void
+    {
+        $this->eachSeed(function (int $seed, int $step): void {
+            IdentityMap::flush();
+
+            /** @var list<User> $users */
+            $users = [];
+            for ($i = 0, $count = mt_rand(2, 5); $i < $count; $i++) {
+                $users[] = User::factory()->create();
+            }
+
+            foreach ($users as $u) {
+                for ($i = 0, $count = mt_rand(0, 3); $i < $count; $i++) {
+                    Post::create([
+                        'user_id' => $u->id,
+                        'title' => "p{$u->id}-{$i}",
+                        'published' => (bool) mt_rand(0, 1),
+                    ]);
+                }
+            }
+
+            foreach ($users as $u) {
+                if (mt_rand(0, 1) === 1) {
+                    $u->load('posts');
+                }
+            }
+
+            $userIds = array_map(fn (User $u) => $u->id, $users);
+            $predicateValue = (bool) mt_rand(0, 1);
+
+            $actual = User::whereKey($userIds)
+                ->whereDoesntHave('posts', fn ($q) => $q->where('published', $predicateValue))
+                ->get()
+                ->pluck('id')
+                ->sort()
+                ->values()
+                ->all();
+
+            $oracle = IdentityMap::disabled(
+                fn () => User::whereKey($userIds)
+                    ->whereDoesntHave('posts', fn ($q) => $q->where('published', $predicateValue))
+                    ->get()
+                    ->pluck('id')
+                    ->sort()
+                    ->values()
+                    ->all()
+            );
+
+            $this->assertSame($oracle, $actual, 'whereDoesntHave should match oracle');
         });
     }
 

@@ -16,8 +16,16 @@ use Vusys\QueryRicerExtreme\Predicate\PredicateNode;
  */
 final readonly class QueryPatternExtractor
 {
-    /** @param Builder<TModel> $builder */
-    public function __construct(private Builder $builder) {}
+    /**
+     * @param  Builder<TModel>  $builder
+     * @param  list<int>  $skipWhereIndexes  offsets of `wheres` to ignore — used for
+     *                                       whereHas/whereDoesntHave clauses that the
+     *                                       graph-rewrite path handles separately.
+     */
+    public function __construct(
+        private Builder $builder,
+        private array $skipWhereIndexes = [],
+    ) {}
 
     private function hasStructuralHazards(): bool
     {
@@ -34,7 +42,11 @@ final readonly class QueryPatternExtractor
             return true;
         }
 
-        foreach ($query->wheres as $where) {
+        foreach ($query->wheres as $index => $where) {
+            if (in_array($index, $this->skipWhereIndexes, true)) {
+                continue;
+            }
+
             if (($where['type'] ?? null) === 'raw') {
                 return true;
             }
@@ -88,7 +100,11 @@ final readonly class QueryPatternExtractor
 
         $pkWhere = null;
 
-        foreach ($wheres as $where) {
+        foreach ($wheres as $index => $where) {
+            if (in_array($index, $this->skipWhereIndexes, true)) {
+                continue;
+            }
+
             $type = $where['type'] ?? null;
             $column = $where['column'] ?? null;
             $operator = $where['operator'] ?? null;
@@ -158,7 +174,11 @@ final readonly class QueryPatternExtractor
         $inWhere = null;
         $extraPredicateNodes = [];
 
-        foreach ($wheres as $where) {
+        foreach ($wheres as $index => $where) {
+            if (in_array($index, $this->skipWhereIndexes, true)) {
+                continue;
+            }
+
             $type = $where['type'] ?? null;
             $column = $where['column'] ?? null;
             $boolean = $where['boolean'] ?? null;
@@ -256,7 +276,11 @@ final readonly class QueryPatternExtractor
         /** @var list<PredicateNode> $extraNodes */
         $extraNodes = [];
 
-        foreach ($wheres as $where) {
+        foreach ($wheres as $index => $where) {
+            if (in_array($index, $this->skipWhereIndexes, true)) {
+                continue;
+            }
+
             $type = $where['type'] ?? null;
             $column = $where['column'] ?? null;
             $boolean = $where['boolean'] ?? null;
@@ -381,7 +405,11 @@ final readonly class QueryPatternExtractor
 
         $nodes = [];
 
-        foreach ($wheres as $where) {
+        foreach ($wheres as $index => $where) {
+            if (in_array($index, $this->skipWhereIndexes, true)) {
+                continue;
+            }
+
             if ($this->isSafeGlobalScopeWhere($where)) {
                 continue;
             }
