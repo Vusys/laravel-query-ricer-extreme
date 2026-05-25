@@ -12,8 +12,5 @@ use Illuminate\Database\Eloquent\Model;
  */
 interface ColumnSemanticsResolver
 {
-    /**
-     * @param  class-string<Model>  $modelClass
-     */
-    public function for(string $modelClass, string $column): ColumnSemantics;
+    public function for(Model $model, string $column): ColumnSemantics;
 }

@@ -49,6 +49,9 @@ abstract class AbstractDriverSemantics implements DriverSemantics
             return $cmp < 0 ? EvaluationResult::Match : EvaluationResult::Reject;
         }
 
+        // $operator is narrowed to '<=' here by the DriverSemantics interface
+        // contract — only the four ordered operators reach this branch and the
+        // three preceding checks have eliminated the others.
         return $cmp <= 0 ? EvaluationResult::Match : EvaluationResult::Reject;
     }
 

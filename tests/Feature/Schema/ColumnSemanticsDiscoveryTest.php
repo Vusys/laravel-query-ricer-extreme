@@ -28,21 +28,21 @@ final class ColumnSemanticsDiscoveryTest extends TestCase
     #[Test]
     public function email_column_is_classified_as_string(): void
     {
-        $semantics = $this->discovery->for(User::class, 'email');
+        $semantics = $this->discovery->for(new User, 'email');
         self::assertSame(ColumnType::String, $semantics->type);
     }
 
     #[Test]
     public function id_column_is_classified_as_integer(): void
     {
-        $semantics = $this->discovery->for(User::class, 'id');
+        $semantics = $this->discovery->for(new User, 'id');
         self::assertSame(ColumnType::Integer, $semantics->type);
     }
 
     #[Test]
     public function unknown_column_returns_unknown_semantics(): void
     {
-        $semantics = $this->discovery->for(User::class, 'nonexistent_column');
+        $semantics = $this->discovery->for(new User, 'nonexistent_column');
         self::assertSame(ColumnType::Unknown, $semantics->type);
         self::assertSame(StringComparisonMode::Unknown, $semantics->stringComparison);
     }
@@ -53,7 +53,7 @@ final class ColumnSemanticsDiscoveryTest extends TestCase
         config()->set('query-ricer-extreme.schema_discovery.enabled', false);
         $this->discovery->flush();
 
-        $semantics = $this->discovery->for(User::class, 'email');
+        $semantics = $this->discovery->for(new User, 'email');
         self::assertSame(ColumnType::Unknown, $semantics->type);
     }
 
@@ -67,7 +67,7 @@ final class ColumnSemanticsDiscoveryTest extends TestCase
             public $timestamps = false;
         };
 
-        $semantics = $this->discovery->for($orphanModel::class, 'anything');
+        $semantics = $this->discovery->for($orphanModel, 'anything');
         self::assertSame(ColumnType::Unknown, $semantics->type);
     }
 
@@ -77,7 +77,7 @@ final class ColumnSemanticsDiscoveryTest extends TestCase
         config()->set('query-ricer-extreme.database_semantics.'.DB::connection()->getDriverName().'.string_comparisons', 'conservative_unknown');
         $this->discovery->flush();
 
-        $semantics = $this->discovery->for(User::class, 'email');
+        $semantics = $this->discovery->for(new User, 'email');
         self::assertSame(StringComparisonMode::Unknown, $semantics->stringComparison);
     }
 
@@ -87,7 +87,7 @@ final class ColumnSemanticsDiscoveryTest extends TestCase
         config()->set('query-ricer-extreme.database_semantics.'.DB::connection()->getDriverName().'.string_comparisons', 'php_strict');
         $this->discovery->flush();
 
-        $semantics = $this->discovery->for(User::class, 'email');
+        $semantics = $this->discovery->for(new User, 'email');
         self::assertSame(StringComparisonMode::CaseSensitive, $semantics->stringComparison);
     }
 
@@ -98,7 +98,7 @@ final class ColumnSemanticsDiscoveryTest extends TestCase
         config()->set('query-ricer-extreme.database_semantics.'.$driver.'.string_comparisons', 'database_collation');
         $this->discovery->flush();
 
-        $semantics = $this->discovery->for(User::class, 'email');
+        $semantics = $this->discovery->for(new User, 'email');
 
         // SQLite + Postgres default to case-sensitive; MySQL/MariaDB depend on
         // the table's collation (driver-default unknown without server info).

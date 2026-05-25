@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Vusys\QueryRicerExtreme\Driver;
 
+use Illuminate\Database\Eloquent\Model;
+
 /**
  * Default resolver: returns ColumnSemantics::unknown() for every column.
  *
@@ -13,7 +15,7 @@ namespace Vusys\QueryRicerExtreme\Driver;
 final class NullColumnSemanticsResolver implements ColumnSemanticsResolver
 {
     #[\Override]
-    public function for(string $modelClass, string $column): ColumnSemantics
+    public function for(Model $model, string $column): ColumnSemantics
     {
         return ColumnSemantics::unknown();
     }

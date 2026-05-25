@@ -91,22 +91,15 @@ final class PredicateEvaluatorTest extends TestCase
     }
 
     #[Test]
-    public function equality_matches_int_to_bool(): void
+    public function cross_type_int_bool_equality_unknown_under_conservative_default(): void
     {
-        // raw attribute is 1 (SQLite boolean), predicate value is true
+        // The default evaluator uses ConservativeSemantics, which refuses to
+        // coerce across types. Driver-aware profiles (Sqlite, MySql, …) handle
+        // tinyint↔bool coercion and are covered in their own driver tests.
         $attrs = $this->attributes(['active' => 1]);
         $node = new ComparisonNode('active', '=', true);
 
-        $this->assertSame(EvaluationResult::Match, $this->evaluator->evaluate($attrs, $node));
-    }
-
-    #[Test]
-    public function equality_rejects_int_zero_against_true(): void
-    {
-        $attrs = $this->attributes(['active' => 0]);
-        $node = new ComparisonNode('active', '=', true);
-
-        $this->assertSame(EvaluationResult::Reject, $this->evaluator->evaluate($attrs, $node));
+        $this->assertSame(EvaluationResult::Unknown, $this->evaluator->evaluate($attrs, $node));
     }
 
     #[Test]

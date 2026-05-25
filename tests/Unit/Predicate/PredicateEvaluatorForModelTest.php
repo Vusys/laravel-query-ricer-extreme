@@ -21,10 +21,19 @@ use Vusys\QueryRicerExtreme\Predicate\PredicateEvaluator;
 
 final class PredicateEvaluatorForModelTest extends TestCase
 {
+    private ?Container $previousContainer = null;
+
+    #[\Override]
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->previousContainer = Container::getInstance();
+    }
+
     #[\Override]
     protected function tearDown(): void
     {
-        Container::setInstance();
+        Container::setInstance($this->previousContainer);
         parent::tearDown();
     }
 

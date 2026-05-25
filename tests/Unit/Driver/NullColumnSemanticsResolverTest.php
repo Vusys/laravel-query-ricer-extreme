@@ -17,8 +17,9 @@ final class NullColumnSemanticsResolverTest extends TestCase
     public function every_lookup_returns_unknown_semantics(): void
     {
         $resolver = new NullColumnSemanticsResolver;
+        $model = new class extends Model {};
 
-        $semantics = $resolver->for(Model::class, 'whatever_column');
+        $semantics = $resolver->for($model, 'whatever_column');
 
         self::assertSame(ColumnType::Unknown, $semantics->type);
         self::assertNull($semantics->collation);

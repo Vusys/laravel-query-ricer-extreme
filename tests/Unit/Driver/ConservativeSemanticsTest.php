@@ -21,24 +21,32 @@ final class ConservativeSemanticsTest extends TestCase
     }
 
     #[Test]
-    public function different_strings_reject_using_loose_eq_shim(): void
+    public function different_strings_of_same_type_reject(): void
     {
         $s = new ConservativeSemantics;
         self::assertSame(EvaluationResult::Reject, $s->compare('disabled', '=', 'active', ColumnSemantics::unknown()));
     }
 
     #[Test]
-    public function int_one_matches_bool_true(): void
+    public function cross_type_equality_returns_unknown(): void
     {
         $s = new ConservativeSemantics;
-        self::assertSame(EvaluationResult::Match, $s->compare(1, '=', true, ColumnSemantics::unknown()));
+        // Conservative fallback refuses to guess about driver-specific
+        // int↔bool coercion. Profiles that know the engine (Sqlite, MySql…)
+        // handle this; the unknown-driver default does not.
+        self::assertSame(EvaluationResult::Unknown, $s->compare(1, '=', true, ColumnSemantics::unknown()));
+        self::assertSame(EvaluationResult::Unknown, $s->compare(0, '=', true, ColumnSemantics::unknown()));
+        self::assertSame(EvaluationResult::Unknown, $s->compare(1, '!=', true, ColumnSemantics::unknown()));
     }
 
     #[Test]
-    public function int_zero_rejects_bool_true(): void
+    public function same_type_strict_equality_resolves(): void
     {
         $s = new ConservativeSemantics;
-        self::assertSame(EvaluationResult::Reject, $s->compare(0, '=', true, ColumnSemantics::unknown()));
+        self::assertSame(EvaluationResult::Match, $s->compare(1, '=', 1, ColumnSemantics::unknown()));
+        self::assertSame(EvaluationResult::Reject, $s->compare(1, '=', 2, ColumnSemantics::unknown()));
+        self::assertSame(EvaluationResult::Match, $s->compare(true, '=', true, ColumnSemantics::unknown()));
+        self::assertSame(EvaluationResult::Reject, $s->compare(true, '=', false, ColumnSemantics::unknown()));
     }
 
     #[Test]

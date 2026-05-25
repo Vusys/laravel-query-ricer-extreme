@@ -9,11 +9,9 @@ use Vusys\QueryRicerExtreme\Enums\EvaluationResult;
 /**
  * Default fallback profile when no driver-specific semantics are wired.
  *
- * Step 1 of M11: mirrors today's PHP loose-equality behaviour so the
- * interface refactor is a no-op for existing tests. Step 3 introduces
- * per-driver profiles ({@see SqliteSemantics}, {@see MySqlSemantics}…)
- * that resolve confidently using ColumnSemantics, and this profile will
- * be tightened to return Unknown for anything not provably safe.
+ * Uses strict type-aware equality: cross-type comparisons return Unknown
+ * rather than guess. Driver-specific profiles ({@see SqliteSemantics},
+ * {@see MySqlSemantics}…) handle the safe coercions their engines perform.
  */
 final class ConservativeSemantics implements DriverSemantics
 {
@@ -24,17 +22,18 @@ final class ConservativeSemantics implements DriverSemantics
             return EvaluationResult::Unknown;
         }
 
-        // phpcs:disable SlevomatCodingStandard.Operators.DisallowEqualOperators
-        if ($operator === '=') {
-            return $left == $right ? EvaluationResult::Match : EvaluationResult::Reject;
-        }
+        if (in_array($operator, ['=', '!=', '<>'], true)) {
+            if (gettype($left) !== gettype($right)) {
+                return EvaluationResult::Unknown;
+            }
 
-        if ($operator === '!=' || $operator === '<>') {
-            return $left != $right ? EvaluationResult::Match : EvaluationResult::Reject;
+            $equal = $left === $right;
+            $expectEqual = $operator === '=';
+
+            return $equal === $expectEqual ? EvaluationResult::Match : EvaluationResult::Reject;
         }
 
         return $this->compareOrdered($left, $operator, $right);
-        // phpcs:enable
     }
 
     #[\Override]

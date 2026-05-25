@@ -15,10 +15,10 @@ use Vusys\QueryRicerExtreme\Driver\StringComparisonMode;
 
 final class SchemaDiscovery implements ColumnSemanticsResolver
 {
-    /** @var array<class-string<Model>, list<list<string>>> */
+    /** @var array<string, list<list<string>>> */
     private array $uniqueIndexCache = [];
 
-    /** @var array<class-string<Model>, array<string, ColumnSemantics>> */
+    /** @var array<string, array<string, ColumnSemantics>> */
     private array $columnSemanticsCache = [];
 
     /**
@@ -31,19 +31,21 @@ final class SchemaDiscovery implements ColumnSemanticsResolver
             return [];
         }
 
-        if (isset($this->uniqueIndexCache[$modelClass])) {
-            return $this->uniqueIndexCache[$modelClass];
-        }
-
         /** @var Model $instance */
         $instance = new $modelClass;
         $connectionName = $instance->getConnectionName();
+        $cacheKey = $this->cacheKey($modelClass, $connectionName);
+
+        if (isset($this->uniqueIndexCache[$cacheKey])) {
+            return $this->uniqueIndexCache[$cacheKey];
+        }
+
         $table = $instance->getTable();
 
         try {
             $indexes = $this->introspectIndexes($connectionName, $table);
         } catch (Throwable) {
-            return $this->uniqueIndexCache[$modelClass] = [];
+            return $this->uniqueIndexCache[$cacheKey] = [];
         }
 
         $unique = [];
@@ -77,13 +79,13 @@ final class SchemaDiscovery implements ColumnSemanticsResolver
             $unique[] = $columns;
         }
 
-        return $this->uniqueIndexCache[$modelClass] = $unique;
+        return $this->uniqueIndexCache[$cacheKey] = $unique;
     }
 
     #[\Override]
-    public function for(string $modelClass, string $column): ColumnSemantics
+    public function for(Model $model, string $column): ColumnSemantics
     {
-        $semantics = $this->columnSemanticsFor($modelClass);
+        $semantics = $this->columnSemanticsForModel($model);
 
         return $semantics[$column] ?? ColumnSemantics::unknown();
     }
@@ -95,29 +97,29 @@ final class SchemaDiscovery implements ColumnSemanticsResolver
     }
 
     /**
-     * @param  class-string<Model>  $modelClass
      * @return array<string, ColumnSemantics>
      */
-    private function columnSemanticsFor(string $modelClass): array
+    private function columnSemanticsForModel(Model $model): array
     {
         if (config('query-ricer-extreme.schema_discovery.enabled', true) === false) {
             return [];
         }
 
-        if (isset($this->columnSemanticsCache[$modelClass])) {
-            return $this->columnSemanticsCache[$modelClass];
+        $connection = $model->getConnection();
+        $connectionName = $connection->getName();
+        $cacheKey = $this->cacheKey($model::class, $connectionName);
+
+        if (isset($this->columnSemanticsCache[$cacheKey])) {
+            return $this->columnSemanticsCache[$cacheKey];
         }
 
-        /** @var Model $instance */
-        $instance = new $modelClass;
-        $connectionName = $instance->getConnectionName();
-        $table = $instance->getTable();
-        $driver = DB::connection($connectionName)->getDriverName();
+        $table = $model->getTable();
+        $driver = $connection->getDriverName();
 
         try {
             $columns = $this->introspectColumns($connectionName, $table);
         } catch (Throwable) {
-            return $this->columnSemanticsCache[$modelClass] = [];
+            return $this->columnSemanticsCache[$cacheKey] = [];
         }
 
         $configMode = $this->configuredStringMode($driver);
@@ -140,7 +142,12 @@ final class SchemaDiscovery implements ColumnSemanticsResolver
             );
         }
 
-        return $this->columnSemanticsCache[$modelClass] = $semantics;
+        return $this->columnSemanticsCache[$cacheKey] = $semantics;
+    }
+
+    private function cacheKey(string $modelClass, ?string $connectionName): string
+    {
+        return $modelClass.'@'.($connectionName ?? '__default__');
     }
 
     /**

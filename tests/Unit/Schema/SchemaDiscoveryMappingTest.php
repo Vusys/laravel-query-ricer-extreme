@@ -136,6 +136,7 @@ final class SchemaDiscoveryMappingTest extends TestCase
     #[Test]
     public function configured_string_mode_rejects_unknown_value(): void
     {
+        $previous = Container::getInstance();
         $container = new Container;
         Container::setInstance($container);
         $container->instance('config', new Repository([
@@ -150,7 +151,7 @@ final class SchemaDiscoveryMappingTest extends TestCase
             $method = (new ReflectionClass(SchemaDiscovery::class))->getMethod('configuredStringMode');
             self::assertSame('conservative_unknown', $method->invoke(new SchemaDiscovery, 'mysql'));
         } finally {
-            Container::setInstance();
+            Container::setInstance($previous);
         }
     }
 }

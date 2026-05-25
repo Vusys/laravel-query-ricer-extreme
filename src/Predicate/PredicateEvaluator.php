@@ -21,17 +21,14 @@ final readonly class PredicateEvaluator
 
     private ColumnSemanticsResolver $columns;
 
-    /**
-     * @param  class-string<Model>|null  $modelClass
-     */
     public function __construct(
         ?DriverSemantics $semantics = null,
         ?ColumnSemanticsResolver $columns = null,
         /**
-         * Model class used to resolve per-column semantics. When null, every column
-         * resolves to ColumnSemantics::unknown().
+         * Model instance used to resolve per-column semantics on the correct
+         * connection. When null, every column resolves to ColumnSemantics::unknown().
          */
-        private ?string $modelClass = null,
+        private ?Model $model = null,
     ) {
         $this->semantics = $semantics ?? new ConservativeSemantics;
         $this->columns = $columns ?? new NullColumnSemanticsResolver;
@@ -47,7 +44,10 @@ final readonly class PredicateEvaluator
     {
         $app = function_exists('app') ? app() : null;
 
-        if ($app === null || ! $app->bound(DriverSemanticsResolver::class)) {
+        if ($app === null
+            || ! $app->bound(DriverSemanticsResolver::class)
+            || ! $app->bound(ColumnSemanticsResolver::class)
+        ) {
             return new self;
         }
 
@@ -59,7 +59,7 @@ final readonly class PredicateEvaluator
         return new self(
             semantics: $resolver->forConnection($model->getConnection()),
             columns: $columns,
-            modelClass: $model::class,
+            model: $model,
         );
     }
 
@@ -229,10 +229,10 @@ final readonly class PredicateEvaluator
 
     private function columnSemantics(string $column): ColumnSemantics
     {
-        if ($this->modelClass === null) {
+        if (! $this->model instanceof Model) {
             return ColumnSemantics::unknown();
         }
 
-        return $this->columns->for($this->modelClass, $column);
+        return $this->columns->for($this->model, $column);
     }
 }
