@@ -392,6 +392,64 @@ final class WhereHasGraphRewriteTest extends TestCase
     }
 
     #[Test]
+    public function exists_with_where_has_defers_to_sql(): void
+    {
+        [$alice] = $this->seedUsersWithPosts();
+
+        $this->startSqlListener();
+        $result = User::where('email', $alice->email)
+            ->whereHas('posts', fn ($q) => $q->where('published', true))
+            ->exists();
+
+        $this->assertSomeSql();
+        $this->assertTrue($result);
+    }
+
+    #[Test]
+    public function coverage_served_path_with_where_doesnt_have(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => true]);
+        $bob = User::create(['name' => 'Bob', 'email' => 'bob@example.com', 'active' => true]);
+        Post::create(['user_id' => $alice->id, 'title' => 'A1', 'published' => true]);
+        Post::create(['user_id' => $bob->id, 'title' => 'B1', 'published' => false]);
+        $alice->load('posts');
+        $bob->load('posts');
+
+        // Prime coverage with active=true region.
+        User::where('active', true)->get();
+
+        $explanations = $this->store->explain(function (): void {
+            User::where('active', true)
+                ->whereDoesntHave('posts', fn ($q) => $q->where('published', true))
+                ->get();
+        });
+
+        $types = array_map(static fn (Explanation $e): PlanType => $e->type, $explanations);
+        $this->assertContains(PlanType::WhereDoesntHaveFromGraph, $types);
+    }
+
+    #[Test]
+    public function belongs_to_with_soft_deleted_parent_rejects(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => true]);
+        $tag = Tag::create(['name' => 'php']);
+        $post = Post::create(['user_id' => $alice->id, 'tag_id' => $tag->id, 'title' => 'A1', 'published' => true]);
+
+        // Soft-delete alice → entry transitions to SoftDeleted in the store.
+        $alice->delete();
+
+        $this->startSqlListener();
+        $result = Post::whereKey([$post->id])
+            ->whereHas('user', fn ($q) => $q->where('active', true))
+            ->get();
+
+        // Post is in store but its user is soft-deleted → whereHas evaluates Reject
+        // in memory → no SQL. Result is empty because alice fails the EXISTS.
+        $this->assertNoSql();
+        $this->assertCount(0, $result);
+    }
+
+    #[Test]
     public function single_pk_with_where_has_respects_inner_predicate(): void
     {
         // `where('id', $id)` exercises extractSinglePrimaryKeyLookup, not the bounded-key-set
