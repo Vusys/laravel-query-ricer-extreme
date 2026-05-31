@@ -17,6 +17,7 @@ use Vusys\QueryRicerExtreme\Graph\ModelIdentity;
 use Vusys\QueryRicerExtreme\Graph\RelationEdge;
 use Vusys\QueryRicerExtreme\HasIdentityMap;
 use Vusys\QueryRicerExtreme\Knowledge\ColumnBackfiller;
+use Vusys\QueryRicerExtreme\Query\ModelMetadata;
 use Vusys\QueryRicerExtreme\Query\ScopeFingerprinter;
 use Vusys\QueryRicerExtreme\Store\IdentityEntry;
 use Vusys\QueryRicerExtreme\Store\IdentityMapStore;
@@ -72,7 +73,7 @@ final class MemoryBelongsTo extends BelongsTo
             $entry = $store->find(
                 connection: $connection,
                 modelClass: $related::class,
-                table: $related->getTable(),
+                table: ModelMetadata::table($related),
                 primaryKeyName: $related->getKeyName(),
                 primaryKeyValue: $fkValue,
                 fingerprint: $fingerprint,
@@ -81,7 +82,7 @@ final class MemoryBelongsTo extends BelongsTo
             $entry = $store->findByUniqueKey(
                 connection: $connection,
                 modelClass: $related::class,
-                table: $related->getTable(),
+                table: ModelMetadata::table($related),
                 fingerprint: $fingerprint,
                 equalityValues: [$ownerKey => $fkValue],
             );
@@ -249,7 +250,7 @@ final class MemoryBelongsTo extends BelongsTo
             : 'deleted_at';
         $qualifiedDeletedAt = method_exists($related, 'getQualifiedDeletedAtColumn')
             ? $related->getQualifiedDeletedAtColumn()
-            : $related->getTable().'.'.$deletedAt;
+            : ModelMetadata::table($related).'.'.$deletedAt;
 
         return $type === 'Null'
             && $boolean === 'and'
