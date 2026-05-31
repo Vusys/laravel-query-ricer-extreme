@@ -5,4 +5,8 @@ parameters:
     paths:
         - src
         - tests
+    excludePaths:
+        - tests/stubs/*
+    scanFiles:
+        - tests/stubs/excimer.stub.php
     level: 9

@@ -1,0 +1,96 @@
+name: Profile
+
+# Excimer-based flamegraph profiling. Manually triggered. Outputs the
+# collapsed-stack format (Brendan Gregg) which speedscope.app accepts
+# natively as a drag-and-drop import — no server, no installation.
+#
+# Pick a single benchmark to profile via the `bench` input; the workflow
+# runs that bench under Excimer sampling and uploads:
+#   - <bench>.collapsed.txt — load this directly into speedscope.app
+#   - <bench>.topN.txt       — sorted inclusive/self function-time table
+#
+# CI gives a clean isolated CPU compared to a local dev machine, which is
+# the whole point: local profiles are noisy because of every other process
+# competing for cores.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bench:
+        description: 'Benchmark method name (no namespace) to profile'
+        required: true
+        default: 'repeated_find_with_identity_map'
+      sample_period:
+        description: 'Excimer sample period in seconds (smaller = more samples = more overhead)'
+        required: false
+        default: '0.0001'
+
+permissions:
+  contents: read
+
+jobs:
+  profile:
+    name: Profile ${{ github.event.inputs.bench }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup PHP with Excimer
+        uses: shivammathur/setup-php@7c071dfe9dc99bdf297fa79cb49ea005b9fcadbc # v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, pdo_sqlite, excimer
+          coverage: none
+          tools: composer:v2
+
+      - name: Verify Excimer loaded
+        run: php -r "exit(extension_loaded('excimer') ? 0 : 1);"
+
+      - name: Configure Composer authentication
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: composer config --global --auth github-oauth.github.com "$GH_TOKEN"
+
+      - name: Cache Composer dependencies
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: ~/.composer/cache/files
+          key: composer-profile-${{ hashFiles('composer.json') }}
+          restore-keys: composer-profile-
+
+      - name: Install dependencies
+        run: composer update --prefer-dist --no-interaction --no-progress
+
+      - name: Run benchmark under profiler
+        env:
+          DB_CONNECTION: sqlite
+          PROFILE: '1'
+          PROFILE_DIR: build/profiles
+          EXCIMER_PERIOD: ${{ github.event.inputs.sample_period }}
+        run: |
+          mkdir -p build/profiles
+          vendor/bin/phpunit \
+            --testsuite Performance \
+            --filter "::${{ github.event.inputs.bench }}$" \
+            --testdox
+
+      - name: List artifacts produced
+        run: ls -la build/profiles/
+
+      - name: Print top-N summary to log
+        run: |
+          for f in build/profiles/*.topN.txt; do
+            echo "::group::$(basename "$f")"
+            cat "$f"
+            echo "::endgroup::"
+          done
+
+      - name: Upload profile artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: profile-${{ github.event.inputs.bench }}-${{ github.run_id }}
+          path: build/profiles/
+          if-no-files-found: error
+          retention-days: 30
