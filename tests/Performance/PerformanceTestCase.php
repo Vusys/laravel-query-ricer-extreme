@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Vusys\QueryRicerExtreme\Tests\Performance;
 
 use Illuminate\Support\Facades\DB;
+use Vusys\QueryRicerExtreme\Coverage\CoverageRegistry;
+use Vusys\QueryRicerExtreme\Graph\IdentityGraph;
 use Vusys\QueryRicerExtreme\Store\IdentityMapStore;
 use Vusys\QueryRicerExtreme\Tests\TestCase;
 
@@ -15,6 +17,8 @@ abstract class PerformanceTestCase extends TestCase
         $this->expectNotToPerformAssertions();
 
         resolve(IdentityMapStore::class)->flush();
+        resolve(CoverageRegistry::class)->flush();
+        resolve(IdentityGraph::class)->flush();
 
         DB::flushQueryLog();
         DB::enableQueryLog();
