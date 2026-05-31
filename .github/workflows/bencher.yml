@@ -97,6 +97,7 @@ jobs:
             --testbed ubuntu-latest \
             --adapter json \
             --github-actions "$GITHUB_TOKEN" \
+            --err \
             --file results.bmf.json
 
       - name: Upload raw perf output
