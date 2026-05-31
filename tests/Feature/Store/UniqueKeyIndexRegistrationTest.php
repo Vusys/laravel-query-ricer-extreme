@@ -5,6 +5,13 @@ declare(strict_types=1);
 namespace Vusys\QueryRicerExtreme\Tests\Feature\Store;
 
 use PHPUnit\Framework\Attributes\Test;
+use Vusys\QueryRicerExtreme\Enums\FactConfidence;
+use Vusys\QueryRicerExtreme\Enums\FactSource;
+use Vusys\QueryRicerExtreme\Enums\LifecycleState;
+use Vusys\QueryRicerExtreme\Knowledge\AttributeFact;
+use Vusys\QueryRicerExtreme\Knowledge\AttributeKnowledge;
+use Vusys\QueryRicerExtreme\Knowledge\RelationKnowledge;
+use Vusys\QueryRicerExtreme\Store\IdentityEntry;
 use Vusys\QueryRicerExtreme\Store\UniqueKeyIndex;
 use Vusys\QueryRicerExtreme\Tests\Models\User;
 use Vusys\QueryRicerExtreme\Tests\TestCase;
@@ -137,5 +144,82 @@ final class UniqueKeyIndexRegistrationTest extends TestCase
         $this->index->markDiscovered(User::class);
 
         $this->assertTrue($this->index->hasDiscovered(User::class));
+    }
+
+    #[Test]
+    public function index_skips_compound_key_when_one_column_fact_is_missing(): void
+    {
+        config(['query-ricer-extreme.models' => [
+            User::class => ['unique' => [['tenant_id', 'slug']]],
+        ]]);
+
+        $entry = $this->makeEntry(['tenant_id' => 7]);
+
+        $this->index->index($entry, 'map-key-1');
+
+        $partialFingerprint = $this->index->makeFingerprint(
+            'default',
+            User::class,
+            'users',
+            'fp',
+            ['tenant_id' => 7],
+        );
+
+        $this->assertNull(
+            $this->index->findMapKey($partialFingerprint),
+            'Partial-fact entries must not be registered under any unique-index fingerprint.',
+        );
+    }
+
+    #[Test]
+    public function index_registers_compound_key_when_all_column_facts_present(): void
+    {
+        config(['query-ricer-extreme.models' => [
+            User::class => ['unique' => [['tenant_id', 'slug']]],
+        ]]);
+
+        $entry = $this->makeEntry(['tenant_id' => 7, 'slug' => 'alpha']);
+
+        $this->index->index($entry, 'map-key-1');
+
+        $fingerprint = $this->index->makeFingerprint(
+            'default',
+            User::class,
+            'users',
+            'fp',
+            ['slug' => 'alpha', 'tenant_id' => 7],
+        );
+
+        $this->assertSame('map-key-1', $this->index->findMapKey($fingerprint));
+    }
+
+    /** @param array<string, mixed> $facts */
+    private function makeEntry(array $facts): IdentityEntry
+    {
+        $attributes = new AttributeKnowledge;
+        foreach ($facts as $col => $val) {
+            $attributes->set($col, new AttributeFact(
+                column: $col,
+                originalValue: $val,
+                currentValue: $val,
+                isDirty: false,
+                confidence: FactConfidence::Certain,
+                source: FactSource::HydratedFromDatabase,
+            ));
+        }
+
+        return new IdentityEntry(
+            connection: 'default',
+            modelClass: User::class,
+            table: 'users',
+            primaryKeyName: 'id',
+            primaryKeyValue: 1,
+            scopeFingerprint: 'fp',
+            model: new User,
+            attributes: $attributes,
+            relations: new RelationKnowledge,
+            state: LifecycleState::Exists,
+            version: 1,
+        );
     }
 }

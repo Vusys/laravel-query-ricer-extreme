@@ -52,6 +52,13 @@ final class ScopeFingerprinterTest extends TestCase
         $this->assertSame('soft-delete:with-trashed', $fingerprint);
     }
 
+    public function test_from_builder_returns_only_trashed_when_filtering_to_trashed_rows(): void
+    {
+        $fingerprint = ScopeFingerprinter::fromBuilder(User::onlyTrashed());
+
+        $this->assertSame('soft-delete:only-trashed', $fingerprint);
+    }
+
     public function test_fingerprint_is_deterministic(): void
     {
         $a = ScopeFingerprinter::fromBuilder(User::query());

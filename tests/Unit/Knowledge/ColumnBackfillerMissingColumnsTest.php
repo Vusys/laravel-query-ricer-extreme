@@ -65,6 +65,55 @@ final class ColumnBackfillerMissingColumnsTest extends TestCase
         $this->assertSame([], $this->backfiller->missingColumns($entry, []));
     }
 
+    #[Test]
+    public function empty_string_columns_are_skipped(): void
+    {
+        $entry = $this->makeEntry(['id' => 1, 'name' => 'Alice']);
+
+        $this->assertSame(['email'], $this->backfiller->missingColumns($entry, ['id', '', 'email']));
+    }
+
+    #[Test]
+    public function backfill_with_empty_missing_columns_short_circuits_to_true(): void
+    {
+        $entry = $this->makeEntry(['id' => 1]);
+
+        $this->assertTrue(
+            $this->backfiller->backfill($entry, []),
+            'backfill must short-circuit (return true) when no columns are missing — never run a SQL fetch.',
+        );
+    }
+
+    #[Test]
+    public function backfill_returns_false_when_entry_class_is_not_an_eloquent_model(): void
+    {
+        $attributes = new AttributeKnowledge;
+        $attributes->set('id', new AttributeFact(
+            column: 'id',
+            originalValue: 1,
+            currentValue: 1,
+            isDirty: false,
+            confidence: FactConfidence::Certain,
+            source: FactSource::HydratedFromDatabase,
+        ));
+
+        $entry = new IdentityEntry(
+            connection: 'default',
+            modelClass: \stdClass::class,
+            table: 'users',
+            primaryKeyName: 'id',
+            primaryKeyValue: 1,
+            scopeFingerprint: 'default',
+            model: new class extends Model {},
+            attributes: $attributes,
+            relations: new RelationKnowledge,
+            state: LifecycleState::Exists,
+            version: 1,
+        );
+
+        $this->assertFalse($this->backfiller->backfill($entry, ['name']));
+    }
+
     /** @param array<string, mixed> $facts */
     private function makeEntry(array $facts): IdentityEntry
     {
