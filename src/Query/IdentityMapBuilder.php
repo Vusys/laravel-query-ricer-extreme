@@ -266,8 +266,7 @@ class IdentityMapBuilder extends Builder
         }
 
         $connection = $this->getModel()->getConnection()->getName() ?? 'default';
-        $scopedBuilder = $this->applyScopes();
-        $fingerprint = ScopeFingerprinter::fromBuilder($scopedBuilder);
+        $fingerprint = ScopeFingerprinter::fromBuilder($this);
         $entry = $store->find(
             connection: $connection,
             modelClass: $model::class,
