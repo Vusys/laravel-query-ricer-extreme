@@ -46,7 +46,8 @@ jobs:
           tools: composer:v2
 
       - name: Verify Excimer loaded
-        run: php -r "exit(extension_loaded('excimer') ? 0 : 1);"
+        run: |
+          php -r "exit(extension_loaded('excimer') ? 0 : 1);"
 
       - name: Configure Composer authentication
         env:
@@ -69,11 +70,12 @@ jobs:
           PROFILE: '1'
           PROFILE_DIR: build/profiles
           EXCIMER_PERIOD: ${{ github.event.inputs.sample_period }}
+          BENCH: ${{ github.event.inputs.bench }}
         run: |
           mkdir -p build/profiles
           vendor/bin/phpunit \
             --testsuite Performance \
-            --filter "::${{ github.event.inputs.bench }}$" \
+            --filter "::${BENCH}\$" \
             --testdox
 
       - name: List artifacts produced
