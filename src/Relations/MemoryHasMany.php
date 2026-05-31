@@ -24,6 +24,7 @@ use Vusys\QueryRicerExtreme\Predicate\AndNode;
 use Vusys\QueryRicerExtreme\Predicate\PredicateEvaluator;
 use Vusys\QueryRicerExtreme\Predicate\PredicateExtractor;
 use Vusys\QueryRicerExtreme\Predicate\PredicateNode;
+use Vusys\QueryRicerExtreme\Query\ModelMetadata;
 use Vusys\QueryRicerExtreme\Query\ScopeFingerprinter;
 use Vusys\QueryRicerExtreme\Store\IdentityEntry;
 use Vusys\QueryRicerExtreme\Store\IdentityMapStore;
@@ -144,7 +145,7 @@ final class MemoryHasMany extends HasMany
             $entry = $store->find(
                 connection: $model->getConnectionName() ?? 'default',
                 modelClass: $model::class,
-                table: $model->getTable(),
+                table: ModelMetadata::table($model),
                 primaryKeyName: $model->getKeyName(),
                 primaryKeyValue: $key,
                 fingerprint: ScopeFingerprinter::fromModel($model),
@@ -376,7 +377,7 @@ final class MemoryHasMany extends HasMany
             : 'deleted_at';
         $qualifiedDeletedAt = method_exists($related, 'getQualifiedDeletedAtColumn')
             ? $related->getQualifiedDeletedAtColumn()
-            : $related->getTable().'.'.$deletedAt;
+            : ModelMetadata::table($related).'.'.$deletedAt;
 
         return $type === 'Null'
             && $boolean === 'and'
@@ -525,7 +526,7 @@ final class MemoryHasMany extends HasMany
             $entry = $store->find(
                 connection: $connection,
                 modelClass: $related::class,
-                table: $related->getTable(),
+                table: ModelMetadata::table($related),
                 primaryKeyName: $related->getKeyName(),
                 primaryKeyValue: $pk,
                 fingerprint: $fingerprint,

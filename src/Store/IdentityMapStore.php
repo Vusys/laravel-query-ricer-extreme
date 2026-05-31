@@ -20,6 +20,7 @@ use Vusys\QueryRicerExtreme\Knowledge\AttributeKnowledge;
 use Vusys\QueryRicerExtreme\Knowledge\RelationKnowledge;
 use Vusys\QueryRicerExtreme\Predicate\PredicateEvaluator;
 use Vusys\QueryRicerExtreme\Predicate\PredicateNode;
+use Vusys\QueryRicerExtreme\Query\ModelMetadata;
 use Vusys\QueryRicerExtreme\Query\ScopeFingerprinter;
 use Vusys\QueryRicerExtreme\Schema\SchemaDiscovery;
 
@@ -107,9 +108,9 @@ final class IdentityMapStore
             $attributes->recordFromModel($model, $allColumnsKnown);
 
             $this->entries[$mapKey] = new IdentityEntry(
-                connection: $model->getConnectionName() ?? 'default',
+                connection: ModelMetadata::connection($model),
                 modelClass: $model::class,
-                table: $model->getTable(),
+                table: ModelMetadata::table($model),
                 primaryKeyName: $model->getKeyName(),
                 primaryKeyValue: $key,
                 scopeFingerprint: $fingerprint,
@@ -184,9 +185,9 @@ final class IdentityMapStore
             // deleted_at is now set, so fromModel() returns 'with-trashed' — but the
             // entry was stored before deletion with the non-trashed fingerprint.
             $mapKey = $this->makeKeyFromParts(
-                $model->getConnectionName() ?? 'default',
+                ModelMetadata::connection($model),
                 $model::class,
-                $model->getTable(),
+                ModelMetadata::table($model),
                 $model->getKeyName(),
                 $key,
                 'soft-delete:default',
@@ -228,9 +229,9 @@ final class IdentityMapStore
 
         // deleted_at is set by the time this fires; use the pre-deletion fingerprint
         $mapKey = $this->makeKeyFromParts(
-            $model->getConnectionName() ?? 'default',
+            ModelMetadata::connection($model),
             $model::class,
-            $model->getTable(),
+            ModelMetadata::table($model),
             $model->getKeyName(),
             $key,
             'soft-delete:default',
@@ -348,6 +349,7 @@ final class IdentityMapStore
             $this->uniqueKeyIndex->flush();
             resolve(SchemaDiscovery::class)->flush();
             ScopeFingerprinter::flush();
+            ModelMetadata::flush();
 
             return;
         }
@@ -813,9 +815,9 @@ final class IdentityMapStore
     private function makeKey(Model $model, int|string $primaryKeyValue, string $fingerprint): string
     {
         return $this->makeKeyFromParts(
-            $model->getConnectionName() ?? 'default',
+            ModelMetadata::connection($model),
             $model::class,
-            $model->getTable(),
+            ModelMetadata::table($model),
             $model->getKeyName(),
             $primaryKeyValue,
             $fingerprint,

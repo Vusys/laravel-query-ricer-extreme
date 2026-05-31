@@ -154,13 +154,13 @@ class IdentityMapBuilder extends Builder
         $wheres = $subQuery->wheres;
         $nodes = [];
 
-        $tablePrefix = $related->getTable().'.';
+        $tablePrefix = ModelMetadata::table($related).'.';
         $deletedAt = method_exists($related, 'getDeletedAtColumn')
             ? $related->getDeletedAtColumn()
             : 'deleted_at';
         $qualifiedDeletedAt = method_exists($related, 'getQualifiedDeletedAtColumn')
             ? $related->getQualifiedDeletedAtColumn()
-            : $related->getTable().'.'.$deletedAt;
+            : ModelMetadata::table($related).'.'.$deletedAt;
 
         foreach ($wheres as $where) {
             $type = $where['type'] ?? null;
@@ -265,12 +265,12 @@ class IdentityMapBuilder extends Builder
             return $this->withoutIdentityMap()->whereKey($id)->first($columns);
         }
 
-        $connection = $this->getModel()->getConnection()->getName() ?? 'default';
+        $connection = ModelMetadata::connection($this->getModel());
         $fingerprint = ScopeFingerprinter::fromBuilder($this);
         $entry = $store->find(
             connection: $connection,
             modelClass: $model::class,
-            table: $model->getTable(),
+            table: ModelMetadata::table($model),
             primaryKeyName: $model->getKeyName(),
             primaryKeyValue: $id,
             fingerprint: $fingerprint,
@@ -301,7 +301,7 @@ class IdentityMapBuilder extends Builder
         if ($store->isAbsent(
             connection: $connection,
             modelClass: $model::class,
-            table: $model->getTable(),
+            table: ModelMetadata::table($model),
             primaryKeyName: $model->getKeyName(),
             primaryKeyValue: $id,
             fingerprint: $fingerprint,
@@ -338,7 +338,7 @@ class IdentityMapBuilder extends Builder
             $store->recordAbsent(
                 connection: $connection,
                 modelClass: $model::class,
-                table: $model->getTable(),
+                table: ModelMetadata::table($model),
                 primaryKeyName: $model->getKeyName(),
                 primaryKeyValue: $id,
                 fingerprint: $fingerprint,
@@ -367,7 +367,7 @@ class IdentityMapBuilder extends Builder
             return parent::getModels($columns);
         }
 
-        $connection = $this->getModel()->getConnection()->getName() ?? 'default';
+        $connection = ModelMetadata::connection($this->getModel());
         $fingerprint = ScopeFingerprinter::fromBuilder($this);
         $extractor = $this->makeExtractor();
 
@@ -378,7 +378,7 @@ class IdentityMapBuilder extends Builder
             $entry = $store->find(
                 connection: $connection,
                 modelClass: $model::class,
-                table: $model->getTable(),
+                table: ModelMetadata::table($model),
                 primaryKeyName: $model->getKeyName(),
                 primaryKeyValue: $primaryKeyId,
                 fingerprint: $fingerprint,
@@ -428,7 +428,7 @@ class IdentityMapBuilder extends Builder
             if ($store->isAbsent(
                 connection: $connection,
                 modelClass: $model::class,
-                table: $model->getTable(),
+                table: ModelMetadata::table($model),
                 primaryKeyName: $model->getKeyName(),
                 primaryKeyValue: $primaryKeyId,
                 fingerprint: $fingerprint,
@@ -453,7 +453,7 @@ class IdentityMapBuilder extends Builder
             [$hits, , $unknownKeys] = $store->partitionKeySet(
                 connection: $connection,
                 modelClass: $model::class,
-                table: $model->getTable(),
+                table: ModelMetadata::table($model),
                 primaryKeyName: $model->getKeyName(),
                 keys: $keySet,
                 fingerprint: $fingerprint,
@@ -560,7 +560,7 @@ class IdentityMapBuilder extends Builder
                         $store->recordAbsent(
                             connection: $connection,
                             modelClass: $model::class,
-                            table: $model->getTable(),
+                            table: ModelMetadata::table($model),
                             primaryKeyName: $model->getKeyName(),
                             primaryKeyValue: $unknownKey,
                             fingerprint: $fingerprint,
@@ -599,7 +599,7 @@ class IdentityMapBuilder extends Builder
             $uniqueEntry = $store->findByUniqueKey(
                 connection: $connection,
                 modelClass: $model::class,
-                table: $model->getTable(),
+                table: ModelMetadata::table($model),
                 fingerprint: $fingerprint,
                 equalityValues: $uniqueKeyValues,
             );
@@ -655,7 +655,7 @@ class IdentityMapBuilder extends Builder
             if ($extraNodes === [] && ! $processTruth && $store->isAbsentByUniqueKey(
                 connection: $connection,
                 modelClass: $model::class,
-                table: $model->getTable(),
+                table: ModelMetadata::table($model),
                 fingerprint: $fingerprint,
                 equalityValues: $uniqueKeyValues,
             )) {
@@ -688,7 +688,7 @@ class IdentityMapBuilder extends Builder
                 $store->recordAbsentByUniqueKey(
                     connection: $connection,
                     modelClass: $model::class,
-                    table: $model->getTable(),
+                    table: ModelMetadata::table($model),
                     fingerprint: $fingerprint,
                     equalityValues: $uniqueKeyValues,
                 );
@@ -731,7 +731,7 @@ class IdentityMapBuilder extends Builder
             $store->recordAbsent(
                 connection: $connection,
                 modelClass: $model::class,
-                table: $model->getTable(),
+                table: ModelMetadata::table($model),
                 primaryKeyName: $model->getKeyName(),
                 primaryKeyValue: $primaryKeyId,
                 fingerprint: $fingerprint,
@@ -776,13 +776,13 @@ class IdentityMapBuilder extends Builder
 
         /** @var TModel $model */
         $model = $this->getModel();
-        $connection = $model->getConnection()->getName() ?? 'default';
+        $connection = ModelMetadata::connection($model);
         $fingerprint = ScopeFingerprinter::fromBuilder($this);
 
         $entry = $store->findByUniqueKey(
             connection: $connection,
             modelClass: $model::class,
-            table: $model->getTable(),
+            table: ModelMetadata::table($model),
             fingerprint: $fingerprint,
             equalityValues: $uniqueKeyValues,
         );
@@ -833,7 +833,7 @@ class IdentityMapBuilder extends Builder
         if ($extraNodes === [] && ! $processTruth && $store->isAbsentByUniqueKey(
             connection: $connection,
             modelClass: $model::class,
-            table: $model->getTable(),
+            table: ModelMetadata::table($model),
             fingerprint: $fingerprint,
             equalityValues: $uniqueKeyValues,
         )) {
@@ -853,7 +853,7 @@ class IdentityMapBuilder extends Builder
             $store->recordAbsentByUniqueKey(
                 connection: $connection,
                 modelClass: $model::class,
-                table: $model->getTable(),
+                table: ModelMetadata::table($model),
                 fingerprint: $fingerprint,
                 equalityValues: $uniqueKeyValues,
             );
@@ -880,7 +880,7 @@ class IdentityMapBuilder extends Builder
 
         /** @var TModel $model */
         $model = $this->getModel();
-        $connection = $model->getConnection()->getName() ?? 'default';
+        $connection = ModelMetadata::connection($model);
         $fingerprint = ScopeFingerprinter::fromBuilder($this);
         $extractor = $this->makeExtractor();
 
@@ -916,7 +916,7 @@ class IdentityMapBuilder extends Builder
 
         /** @var TModel $model */
         $model = $this->getModel();
-        $connection = $model->getConnection()->getName() ?? 'default';
+        $connection = ModelMetadata::connection($model);
         $fingerprint = ScopeFingerprinter::fromBuilder($this);
         $extractor = $this->makeExtractor();
 
@@ -963,7 +963,7 @@ class IdentityMapBuilder extends Builder
 
         /** @var TModel $model */
         $model = $this->getModel();
-        $connection = $model->getConnection()->getName() ?? 'default';
+        $connection = ModelMetadata::connection($model);
         $fingerprint = ScopeFingerprinter::fromBuilder($this);
         $extractor = $this->makeExtractor();
 
@@ -1021,7 +1021,7 @@ class IdentityMapBuilder extends Builder
 
         /** @var TModel $model */
         $model = $this->getModel();
-        $connection = $model->getConnection()->getName() ?? 'default';
+        $connection = ModelMetadata::connection($model);
         $fingerprint = ScopeFingerprinter::fromBuilder($this);
         $extractor = $this->makeExtractor();
 
@@ -1079,7 +1079,7 @@ class IdentityMapBuilder extends Builder
 
         /** @var TModel $model */
         $model = $this->getModel();
-        $connection = $model->getConnection()->getName() ?? 'default';
+        $connection = ModelMetadata::connection($model);
         $fingerprint = ScopeFingerprinter::fromBuilder($this);
         $extractor = $this->makeExtractor();
 
@@ -1150,7 +1150,7 @@ class IdentityMapBuilder extends Builder
 
         /** @var TModel $model */
         $model = $this->getModel();
-        $connection = $model->getConnection()->getName() ?? 'default';
+        $connection = ModelMetadata::connection($model);
         $fingerprint = ScopeFingerprinter::fromBuilder($this);
         $extractor = $this->makeExtractor();
 
@@ -1193,7 +1193,7 @@ class IdentityMapBuilder extends Builder
 
         /** @var TModel $model */
         $model = $this->getModel();
-        $connection = $model->getConnection()->getName() ?? 'default';
+        $connection = ModelMetadata::connection($model);
         $fingerprint = ScopeFingerprinter::fromBuilder($this);
         $extractor = $this->makeExtractor();
 
@@ -1249,7 +1249,7 @@ class IdentityMapBuilder extends Builder
 
         /** @var TModel $model */
         $model = $this->getModel();
-        $connection = $model->getConnection()->getName() ?? 'default';
+        $connection = ModelMetadata::connection($model);
         $fingerprint = ScopeFingerprinter::fromBuilder($this);
         $extractor = $this->makeExtractor();
 
@@ -1672,7 +1672,7 @@ class IdentityMapBuilder extends Builder
         $entry = $registry->findCovering(
             modelClass: $model::class,
             connection: $connection,
-            table: $model->getTable(),
+            table: ModelMetadata::table($model),
             scopeFingerprint: $fingerprint,
             queryRegion: $region,
         );
@@ -1693,7 +1693,7 @@ class IdentityMapBuilder extends Builder
         $result = [];
 
         foreach ($entry->primaryKeys as $pk) {
-            $mapEntry = $store->find($connection, $model::class, $model->getTable(), $pkName, $pk, $fingerprint);
+            $mapEntry = $store->find($connection, $model::class, ModelMetadata::table($model), $pkName, $pk, $fingerprint);
 
             if (! $mapEntry instanceof IdentityEntry || $mapEntry->state !== LifecycleState::Exists) {
                 return null;
@@ -1778,7 +1778,7 @@ class IdentityMapBuilder extends Builder
         $registry->record(new CoverageEntry(
             modelClass: $modelClass,
             connection: $connection,
-            table: $this->getModel()->getTable(),
+            table: ModelMetadata::table($this->getModel()),
             scopeFingerprint: $fingerprint,
             region: $region,
             columns: new ColumnSet($columns),
@@ -1796,7 +1796,7 @@ class IdentityMapBuilder extends Builder
     {
         /** @var TModel $model */
         $model = $this->getModel();
-        $connection = $model->getConnection()->getName() ?? 'default';
+        $connection = ModelMetadata::connection($model);
         $fingerprint = ScopeFingerprinter::fromBuilder($this);
 
         $coveredModels = $this->getModelsFromCoverage([], $store, $connection, $fingerprint, $extractor);
@@ -2038,7 +2038,7 @@ class IdentityMapBuilder extends Builder
         $parentEntry = $store->find(
             connection: $related->getConnectionName() ?? 'default',
             modelClass: $related::class,
-            table: $related->getTable(),
+            table: ModelMetadata::table($related),
             primaryKeyName: $related->getKeyName(),
             primaryKeyValue: $fkValue,
             fingerprint: ScopeFingerprinter::fromModel($related),
@@ -2088,7 +2088,7 @@ class IdentityMapBuilder extends Builder
             $childEntry = $store->find(
                 connection: $connection,
                 modelClass: $related::class,
-                table: $related->getTable(),
+                table: ModelMetadata::table($related),
                 primaryKeyName: $related->getKeyName(),
                 primaryKeyValue: $pk,
                 fingerprint: $fingerprint,

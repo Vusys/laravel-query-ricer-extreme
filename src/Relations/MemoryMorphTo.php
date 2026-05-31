@@ -11,6 +11,7 @@ use Vusys\QueryRicerExtreme\Enums\LifecycleState;
 use Vusys\QueryRicerExtreme\Enums\PlanType;
 use Vusys\QueryRicerExtreme\Explanation;
 use Vusys\QueryRicerExtreme\HasIdentityMap;
+use Vusys\QueryRicerExtreme\Query\ModelMetadata;
 use Vusys\QueryRicerExtreme\Query\ScopeFingerprinter;
 use Vusys\QueryRicerExtreme\Store\IdentityMapStore;
 
@@ -82,7 +83,7 @@ final class MemoryMorphTo extends MorphTo
             $entry = $store->find(
                 connection: $connection,
                 modelClass: $resolvedClass,
-                table: $relatedInstance->getTable(),
+                table: ModelMetadata::table($relatedInstance),
                 primaryKeyName: $relatedInstance->getKeyName(),
                 primaryKeyValue: $fkValue,
                 fingerprint: $fingerprint,
@@ -91,7 +92,7 @@ final class MemoryMorphTo extends MorphTo
             $entry = $store->findByUniqueKey(
                 connection: $connection,
                 modelClass: $resolvedClass,
-                table: $relatedInstance->getTable(),
+                table: ModelMetadata::table($relatedInstance),
                 fingerprint: $fingerprint,
                 equalityValues: [$ownerKey => $fkValue],
             );
@@ -174,7 +175,7 @@ final class MemoryMorphTo extends MorphTo
             : 'deleted_at';
         $qualifiedDeletedAt = method_exists($related, 'getQualifiedDeletedAtColumn')
             ? $related->getQualifiedDeletedAtColumn()
-            : $related->getTable().'.'.$deletedAt;
+            : ModelMetadata::table($related).'.'.$deletedAt;
 
         return $type === 'Null'
             && $boolean === 'and'
