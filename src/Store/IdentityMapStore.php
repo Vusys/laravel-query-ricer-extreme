@@ -347,6 +347,7 @@ final class IdentityMapStore
             $this->observabilityEnabled = null;
             $this->uniqueKeyIndex->flush();
             resolve(SchemaDiscovery::class)->flush();
+            ScopeFingerprinter::flush();
 
             return;
         }

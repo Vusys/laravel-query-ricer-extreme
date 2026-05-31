@@ -12,6 +12,22 @@ use Illuminate\Database\Eloquent\SoftDeletingScope;
 final class ScopeFingerprinter
 {
     /**
+     * Cache for extraScopePart output keyed by `class|removed-scopes`. Global
+     * scopes are class-level static state in Eloquent — they're registered in
+     * the model's `boot()` and don't change at runtime under normal use, so
+     * the canonical output is deterministic per (class, removed-scopes) pair.
+     * The profile shows this function dominating find() time because it
+     * applyScopes()'s a fresh builder, walks the WHERE clauses, and (via
+     * SoftDeletes) calls Model::getTable() → Str::pluralStudly() per call.
+     *
+     * @var array<string, string>
+     */
+    private static array $extraScopeCache = [];
+
+    /** @var array<class-string<Model>, bool> */
+    private static array $usesSoftDeletesCache = [];
+
+    /**
      * @template T of Model
      *
      * @param  Builder<T>  $builder
@@ -41,6 +57,17 @@ final class ScopeFingerprinter
         return $model->getAttribute($deletedAtColumn) !== null
             ? 'soft-delete:with-trashed'
             : 'soft-delete:default';
+    }
+
+    /**
+     * Clear the per-class memoization. Tests that register global scopes
+     * mid-suite, or production code that mutates scopes at runtime, must
+     * call this to avoid serving stale fingerprints.
+     */
+    public static function flush(): void
+    {
+        self::$extraScopeCache = [];
+        self::$usesSoftDeletesCache = [];
     }
 
     /**
@@ -97,6 +124,13 @@ final class ScopeFingerprinter
     private static function extraScopePart(Builder $builder): string
     {
         $model = $builder->getModel();
+        $removed = $builder->removedScopes();
+        $cacheKey = $model::class.'|'.implode(',', $removed);
+
+        if (isset(self::$extraScopeCache[$cacheKey])) {
+            return self::$extraScopeCache[$cacheKey];
+        }
+
         $deletedAt = method_exists($model, 'getDeletedAtColumn')
             ? $model->getDeletedAtColumn()
             : 'deleted_at';
@@ -105,8 +139,8 @@ final class ScopeFingerprinter
             : $model->getTable().'.'.$deletedAt;
 
         $freshBuilder = $model->newQuery();
-        foreach ($builder->removedScopes() as $removed) {
-            $freshBuilder->withoutGlobalScope($removed);
+        foreach ($removed as $removedScope) {
+            $freshBuilder->withoutGlobalScope($removedScope);
         }
 
         /** @var array<int, array<string, mixed>> $scopeWheres */
@@ -140,16 +174,22 @@ final class ScopeFingerprinter
         }
 
         if ($clauses === []) {
-            return '';
+            return self::$extraScopeCache[$cacheKey] = '';
         }
 
         sort($clauses);
 
-        return md5(implode('|', $clauses));
+        return self::$extraScopeCache[$cacheKey] = md5(implode('|', $clauses));
     }
 
     private static function usesSoftDeletes(Model $model): bool
     {
-        return in_array(SoftDeletes::class, class_uses_recursive($model), true);
+        $class = $model::class;
+
+        return self::$usesSoftDeletesCache[$class] ??= in_array(
+            SoftDeletes::class,
+            class_uses_recursive($model),
+            true,
+        );
     }
 }
