@@ -76,4 +76,32 @@ final class ExplanationTest extends TestCase
 
         $this->assertSame($expected, (string) $explanation);
     }
+
+    #[Test]
+    public function to_array_returns_every_field_under_its_snake_case_key(): void
+    {
+        $explanation = new Explanation(
+            type: PlanType::RewritePrimaryKeysAndMerge,
+            modelClass: 'App\\User',
+            reason: 'partial-key-set',
+            sqlExecuted: true,
+            knownKeys: [1, 2],
+            missingKeys: [3],
+            memoryKeys: [4, 5],
+            rejectedKeys: [6],
+            coverageRegion: 'active = true',
+        );
+
+        $this->assertSame([
+            'type' => 'rewrite_primary_keys_and_merge',
+            'model_class' => 'App\\User',
+            'reason' => 'partial-key-set',
+            'sql_executed' => true,
+            'known_keys' => [1, 2],
+            'missing_keys' => [3],
+            'memory_keys' => [4, 5],
+            'rejected_keys' => [6],
+            'coverage_region' => 'active = true',
+        ], $explanation->toArray());
+    }
 }

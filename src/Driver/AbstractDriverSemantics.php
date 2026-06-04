@@ -96,7 +96,7 @@ abstract class AbstractDriverSemantics implements DriverSemantics
     private function orderedCompare(mixed $left, mixed $right, ColumnSemantics $column): ?int
     {
         if ((is_int($left) || is_float($left)) && (is_int($right) || is_float($right))) {
-            return (float) $left <=> (float) $right;
+            return $left <=> $right;
         }
 
         if (is_string($left) && is_string($right)) {

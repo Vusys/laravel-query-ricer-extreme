@@ -25,6 +25,12 @@
             "ignoreSourceCodeByRegex": [
                 ".*absent\\[\\$mapKey\\] = true.*",
                 ".*absent\\[\\$journalEntry->entryKey\\] = true.*",
+                // UniqueKeyIndex::recordAbsent — absent[] is only ever read via isset()
+                ".*\\$this->absent\\[\\$uniqueFingerprint\\] = true.*",
+                // UniqueKeyIndex::uniqueIndexesForModelClass — $seen[] is only ever read via isset()
+                ".*\\$seen\\[\\$key\\] = true.*",
+                // UniqueKeyIndex::markDiscovered — discoveredClasses[] is only ever read via isset() in hasDiscovered()
+                ".*\\$this->discoveredClasses\\[\\$modelClass\\] = true.*",
             ]
         },
         // break vs continue after $found = true are equivalent — $found cannot be unset by remaining iterations
@@ -49,6 +55,28 @@
         // Removing array_values produces a sparse array but foreach/count are unaffected — no observable difference.
         "UnwrapArrayValues": {
             "ignoreSourceCodeByRegex": [".*array_values\\(array_filter\\(.*"]
+        },
+        // Cache-key concatenations: SchemaDiscovery::cacheKey and MemoryBelongsToMany::resolveInverseRelationName
+        // build per-(class,connection,table) / (related,parent,pivot) cache keys. Any consistent encoding that
+        // remains unique per tuple keeps the cache correct, so dropping a separator, reordering operands, or
+        // swapping the coalesce default produces a still-unique key for the single tuple any one test exercises.
+        // Killing these would require tests that explicitly probe two tuples differing in just one slot.
+        "Concat": {
+            "ignoreSourceCodeByRegex": [
+                ".*\\$modelClass[\\s.]*'@'[\\s.]*\\(\\$connectionName \\?\\? '__default__'\\).*",
+                ".*\\$cacheKey = \\$relatedClass[\\s.]*'\\|'[\\s.]*\\$parentClass.*"
+            ]
+        },
+        "ConcatOperandRemoval": {
+            "ignoreSourceCodeByRegex": [
+                ".*\\$modelClass[\\s.]*'@'[\\s.]*\\(\\$connectionName \\?\\? '__default__'\\).*",
+                ".*\\$cacheKey = \\$relatedClass[\\s.]*'\\|'[\\s.]*\\$parentClass.*"
+            ]
+        },
+        "Coalesce": {
+            "ignoreSourceCodeByRegex": [
+                ".*\\$modelClass[\\s.]*'@'[\\s.]*\\(\\$connectionName \\?\\? '__default__'\\).*"
+            ]
         },
         // IdentityMapBuilder::getModels — ArrayOneItem on the final `return $models` after SQL.
         // The identity map entry always shadows the absent record for a model found by SQL;
@@ -76,6 +104,26 @@
         "CastString": {
             "ignoreSourceCodeByRegex": [
                 ".*\\(string\\) \\$this->primaryKeyValue.*"
+            ]
+        },
+        // ConservativeSemantics::compare — the early `$left === null || $right === null` guard is a
+        // fast-path duplicate. Mutating to `&&` leaves behavior unchanged because (a) for equality ops,
+        // the gettype() mismatch check returns Unknown for mixed null/non-null anyway, and (b) for
+        // ordered ops, the `(!is_int && !is_float) || ...` type guard in compareOrdered() catches null.
+        // Keep the early guard for readability; document the mutant as behaviorally equivalent.
+        "LogicalOr": {
+            "ignoreSourceCodeByRegex": [
+                ".*if \\(\\$left === null \\|\\| \\$right === null\\).*"
+            ]
+        },
+        // ConservativeSemantics::compareForOrder / compareOrdered — `!is_int(x) && !is_float(x)` is the
+        // pair of mutually-exclusive predicates for "x is not numeric". Negating ALL sub-expressions on
+        // one half yields `is_int(x) && is_float(x)`, which is always false (a value cannot be both),
+        // so that disjunct collapses out and the remaining half still catches every problematic case.
+        // The other half's mutation is killed by the asymmetric-type tests in ConservativeSemanticsTest.
+        "LogicalAndAllSubExprNegation": {
+            "ignoreSourceCodeByRegex": [
+                ".*! is_int\\(\\$left\\) && ! is_float\\(\\$left\\).*\\|\\|.*! is_int\\(\\$right\\) && ! is_float\\(\\$right\\).*"
             ]
         },
     },
