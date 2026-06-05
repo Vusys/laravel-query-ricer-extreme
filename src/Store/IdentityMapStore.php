@@ -128,7 +128,7 @@ final class IdentityMapStore
         $this->uniqueKeyIndex->index($this->entries[$mapKey], $mapKey);
     }
 
-    public function markAllColumnsKnown(Model $model): void
+    public function markAllColumnsKnown(Model $model, ?string $fingerprint = null): void
     {
         $key = $model->getKey();
 
@@ -136,7 +136,7 @@ final class IdentityMapStore
             return;
         }
 
-        $fingerprint = ScopeFingerprinter::fromModel($model);
+        $fingerprint ??= ScopeFingerprinter::fromModel($model);
         $mapKey = $this->makeKey($model, $key, $fingerprint);
 
         if (isset($this->entries[$mapKey])) {

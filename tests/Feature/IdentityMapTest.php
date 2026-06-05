@@ -784,6 +784,35 @@ final class IdentityMapTest extends TestCase
     }
 
     #[Test]
+    public function with_trashed_find_on_alive_model_caches_under_builder_fingerprint_not_model_fingerprint(): void
+    {
+        // ScopeFingerprinter::fromBuilder(withTrashed) returns 'soft-delete:with-trashed'
+        // while ScopeFingerprinter::fromModel(aliveUser) returns 'soft-delete:default'.
+        // find() must (a) call $store->setPendingFingerprint(<builder fingerprint>)
+        // before SQL so the retrieved listener remembers the model under the
+        // query's scope, and (b) pass the same fingerprint to markAllColumnsKnown
+        // so the entry is flagged as complete under the storage key. Without (a)
+        // or (b), the second withTrashed() lookup would either miss the cache or
+        // fall through to the backfiller and re-fire SQL.
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+
+        $first = User::withTrashed()->find($alice->id);
+        $this->assertInstanceOf(User::class, $first);
+        $this->assertNull($first->deleted_at);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $second = User::withTrashed()->find($alice->id);
+
+        $this->assertSame(0, $queryCount,
+            'second withTrashed()->find() on an alive model must hit memory under the builder fingerprint');
+        $this->assertSame($first, $second);
+    }
+
+    #[Test]
     public function remember_does_not_store_a_model_that_does_not_exist(): void
     {
         $model = new User;

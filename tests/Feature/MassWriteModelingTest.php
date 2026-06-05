@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Sleep;
 use PHPUnit\Framework\Attributes\Test;
 use Vusys\QueryRicerExtreme\Coverage\CoverageRegistry;
+use Vusys\QueryRicerExtreme\Graph\IdentityGraph;
 use Vusys\QueryRicerExtreme\Predicate\AndNode;
 use Vusys\QueryRicerExtreme\Predicate\ComparisonNode;
 use Vusys\QueryRicerExtreme\Predicate\PredicateEvaluator;
@@ -254,17 +255,31 @@ final class MassWriteModelingTest extends TestCase
     #[Test]
     public function force_delete_flushes_identity_store_entries(): void
     {
+        $graph = resolve(IdentityGraph::class);
+
         $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'active' => false]);
         $bob = User::create(['name' => 'Bob', 'email' => 'bob@example.com', 'active' => true]);
+        Post::create(['user_id' => $alice->id, 'title' => 'P1', 'published' => true]);
         User::find($alice->id);
         User::find($bob->id);
+        User::where('active', true)->get();
+        $alice->load('posts');
 
-        $this->assertSame(2, $this->store->debugStats()['entries']);
+        $entriesBefore = $this->store->debugStats()['entries'];
+        $this->assertGreaterThanOrEqual(2, $entriesBefore);
+        $this->assertGreaterThan(0, $this->registry->entryCount(),
+            'coverage must be warmed before forceDelete to make the post-flush assertion meaningful');
+        $this->assertGreaterThan(0, $graph->edgeCount(),
+            'graph must have at least one edge before forceDelete to make the post-flush assertion meaningful');
 
         User::withTrashed()->where('active', false)->forceDelete();
 
-        $this->assertSame(0, $this->store->debugStats()['entries'],
-            'forceDelete must flush all User entries from the identity store');
+        $this->assertLessThan($entriesBefore, $this->store->debugStats()['entries'],
+            'forceDelete must flush User entries from the identity store');
+        $this->assertSame(0, $this->registry->entryCount(),
+            'forceDelete must flush coverage entries for the User class');
+        $this->assertSame(0, $graph->edgeCount(),
+            'forceDelete must invalidate graph edges that target the User class');
     }
 
     // =========================================================================
@@ -857,5 +872,52 @@ final class MassWriteModelingTest extends TestCase
             (string) $aliceAfter->updated_at,
             'cache updated_at must match the SQL UPDATE that just ran',
         );
+    }
+
+    #[Test]
+    public function mass_increment_flushes_coverage_and_graph_for_model_class(): void
+    {
+        $graph = resolve(IdentityGraph::class);
+
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com', 'score' => 10]);
+        Post::create(['user_id' => $alice->id, 'title' => 'P1', 'published' => true]);
+        User::where('score', 10)->get();
+        $alice->load('posts');
+
+        $this->assertGreaterThan(0, $this->registry->entryCount(),
+            'coverage must be warmed before the bulk write');
+        $this->assertGreaterThan(0, $graph->edgeCount(),
+            'graph must have at least one edge before the bulk write');
+
+        User::where('id', $alice->id)->increment('score');
+
+        $this->assertSame(0, $this->registry->entryCount(),
+            'increment must flush coverage entries for the User class');
+        $this->assertSame(0, $graph->edgeCount(),
+            'increment must invalidate graph edges that target the User class');
+    }
+
+    #[Test]
+    public function delete_with_non_extractable_predicate_flushes_identity_store(): void
+    {
+        $alice = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        $p1 = Post::create(['user_id' => $alice->id, 'title' => 'P1', 'published' => true]);
+        $p2 = Post::create(['user_id' => $alice->id, 'title' => 'P2', 'published' => true]);
+        Post::find($p1->id);
+        Post::find($p2->id);
+
+        $entriesBefore = $this->store->debugStats()['entries'];
+        $this->assertGreaterThanOrEqual(2, $entriesBefore);
+
+        // whereRaw produces a `type='raw'` where with no column, so
+        // QueryPatternExtractor cannot build a phase-one predicate and
+        // IdentityMapBuilder::delete() takes the no-predicate else branch
+        // that calls $store->flush($modelClass) directly. Post is a hard-delete
+        // model, so parent::delete() does not loop back through
+        // IdentityMapBuilder::update() and the else-branch flush is observable.
+        Post::whereRaw('id = ?', [$p1->id])->delete();
+
+        $this->assertLessThan($entriesBefore, $this->store->debugStats()['entries'],
+            'delete on a non-extractable predicate must flush Post entries from the identity store');
     }
 }

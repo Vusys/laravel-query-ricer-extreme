@@ -332,7 +332,7 @@ class IdentityMapBuilder extends Builder
 
         if ($result instanceof Model) {
             if ($this->fetchedAllColumns($columns)) {
-                $store->markAllColumnsKnown($result);
+                $store->markAllColumnsKnown($result, $fingerprint);
             }
         } elseif ($result === null) {
             $store->recordAbsent(
@@ -544,7 +544,7 @@ class IdentityMapBuilder extends Builder
             $fetchedByKey = [];
             foreach ($fetched as $fetchedModel) {
                 if ($isFullSelect) {
-                    $store->markAllColumnsKnown($fetchedModel);
+                    $store->markAllColumnsKnown($fetchedModel, $fingerprint);
                 }
                 $k = $fetchedModel->getKey();
                 if (is_int($k) || is_string($k)) {
@@ -680,7 +680,7 @@ class IdentityMapBuilder extends Builder
 
             foreach ($models as $result) {
                 if ($isFullSelect) {
-                    $store->markAllColumnsKnown($result);
+                    $store->markAllColumnsKnown($result, $fingerprint);
                 }
             }
 
@@ -723,7 +723,7 @@ class IdentityMapBuilder extends Builder
 
         foreach ($models as $result) {
             if ($isFullSelect) {
-                $store->markAllColumnsKnown($result);
+                $store->markAllColumnsKnown($result, $fingerprint);
             }
         }
 
