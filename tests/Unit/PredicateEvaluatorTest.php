@@ -6,6 +6,9 @@ namespace Vusys\QueryRicerExtreme\Tests\Unit;
 
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
+use Vusys\QueryRicerExtreme\Driver\ColumnSemantics;
+use Vusys\QueryRicerExtreme\Driver\DriverSemantics;
+use Vusys\QueryRicerExtreme\Driver\NullOrdering;
 use Vusys\QueryRicerExtreme\Enums\EvaluationResult;
 use Vusys\QueryRicerExtreme\Enums\FactConfidence;
 use Vusys\QueryRicerExtreme\Enums\FactSource;
@@ -145,6 +148,61 @@ final class PredicateEvaluatorTest extends TestCase
         $node = new ComparisonNode('name', 'like', 'A%');
 
         $this->assertSame(EvaluationResult::Unknown, $this->evaluator->evaluate($attrs, $node));
+    }
+
+    #[Test]
+    public function comparison_returns_unknown_when_only_attribute_value_is_null(): void
+    {
+        // Custom semantics that always returns Match isolates the early-null
+        // guard in evaluateComparison from the semantics layer's own null
+        // handling. Without the guard, the asymmetric null case would slip
+        // through to semantics->compare and incorrectly report Match.
+        $evaluator = new PredicateEvaluator($this->alwaysMatchSemantics());
+        $attrs = $this->attributes(['status' => null]);
+        $node = new ComparisonNode('status', '=', 'active');
+
+        self::assertSame(EvaluationResult::Unknown, $evaluator->evaluate($attrs, $node));
+    }
+
+    #[Test]
+    public function comparison_returns_unknown_when_only_predicate_value_is_null(): void
+    {
+        $evaluator = new PredicateEvaluator($this->alwaysMatchSemantics());
+        $attrs = $this->attributes(['status' => 'active']);
+        $node = new ComparisonNode('status', '=', null);
+
+        self::assertSame(EvaluationResult::Unknown, $evaluator->evaluate($attrs, $node));
+    }
+
+    private function alwaysMatchSemantics(): DriverSemantics
+    {
+        return new class implements DriverSemantics
+        {
+            #[\Override]
+            public function compare(
+                mixed $left,
+                string $operator,
+                mixed $right,
+                ColumnSemantics $column,
+            ): EvaluationResult {
+                return EvaluationResult::Match;
+            }
+
+            #[\Override]
+            public function compareForOrder(
+                mixed $left,
+                mixed $right,
+                ColumnSemantics $column,
+            ): int {
+                return 0;
+            }
+
+            #[\Override]
+            public function nullOrdering(string $direction): NullOrdering
+            {
+                return NullOrdering::NullsLast;
+            }
+        };
     }
 
     // --- InNode ---

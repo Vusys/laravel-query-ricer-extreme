@@ -90,4 +90,17 @@ final class ConservativeSemanticsTest extends TestCase
         self::assertSame(EvaluationResult::Unknown, $s->compare(null, '=', 'x', ColumnSemantics::unknown()));
         self::assertSame(EvaluationResult::Unknown, $s->compare('x', '=', null, ColumnSemantics::unknown()));
     }
+
+    #[Test]
+    public function compare_for_order_returns_null_when_one_side_is_non_numeric(): void
+    {
+        // Probes each half of `(!is_int && !is_float) || (!is_int && !is_float)` in compareForOrder
+        // independently: dropping a `!` on either side leaves the other half to catch the bad case,
+        // but only if the test exercises both halves with the asymmetric type pair.
+        $s = new ConservativeSemantics;
+        self::assertNull($s->compareForOrder('a', 5, ColumnSemantics::unknown()));
+        self::assertNull($s->compareForOrder(5, 'a', ColumnSemantics::unknown()));
+        self::assertNull($s->compareForOrder('a', 5.5, ColumnSemantics::unknown()));
+        self::assertNull($s->compareForOrder(5.5, 'a', ColumnSemantics::unknown()));
+    }
 }
