@@ -70,7 +70,7 @@ jobs:
             --threads=$(nproc)
 
   full:
-    name: "Mutation testing (full suite, ${{ matrix.db }})"
+    name: Mutation testing (full suite)
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 180
