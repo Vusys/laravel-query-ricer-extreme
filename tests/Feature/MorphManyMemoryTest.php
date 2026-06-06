@@ -62,6 +62,49 @@ final class MorphManyMemoryTest extends TestCase
     }
 
     #[Test]
+    public function morph_many_serves_from_memory_when_soft_delete_null_where_added(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        Comment::create(['commentable_type' => User::class, 'commentable_id' => $user->id, 'body' => 'hello']);
+        Comment::create(['commentable_type' => User::class, 'commentable_id' => $user->id, 'body' => 'world']);
+
+        $user->load('comments');
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = $user->comments()->whereNull('comments.deleted_at')->get();
+
+        $this->assertSame(0, $queryCount, 'isSafeGlobalScopeWhere must accept WHERE comments.deleted_at IS NULL so morphMany still serves from memory');
+        $this->assertCount(2, $result);
+    }
+
+    #[Test]
+    public function morph_many_filters_in_memory_when_soft_delete_null_followed_by_extra_predicate(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        Comment::create(['commentable_type' => User::class, 'commentable_id' => $user->id, 'body' => 'A']);
+        Comment::create(['commentable_type' => User::class, 'commentable_id' => $user->id, 'body' => 'B']);
+        Comment::create(['commentable_type' => User::class, 'commentable_id' => $user->id, 'body' => 'C']);
+
+        $user->load('comments');
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        // A safe soft-delete where must `continue` rather than `break` so the
+        // trailing body='A' predicate is still extracted and applied.
+        $result = $user->comments()->whereNull('comments.deleted_at')->where('body', 'A')->get();
+
+        $this->assertSame(0, $queryCount, 'morphMany must keep serving from memory when chain is whereNull(deleted_at) + extra predicate');
+        $this->assertCount(1, $result);
+    }
+
+    #[Test]
     public function morph_many_filters_in_memory_with_extra_predicate(): void
     {
         $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);

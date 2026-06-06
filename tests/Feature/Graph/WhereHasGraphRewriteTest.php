@@ -223,6 +223,25 @@ final class WhereHasGraphRewriteTest extends TestCase
     }
 
     #[Test]
+    public function inner_soft_delete_null_where_is_treated_as_safe_global_scope(): void
+    {
+        [$alice, $bob] = $this->seedUsersWithPosts();
+
+        // The inner whereNull(deleted_at) is the SoftDeletes global scope; it must be
+        // skipped by extractInnerPredicateFromSubquery so the rewrite still resolves
+        // to an empty inner predicate (existence-only) and serves from the graph.
+        $this->startSqlListener();
+        $result = User::whereKey([$alice->id, $bob->id])
+            ->whereHas('posts', fn ($q) => $q->whereNull('posts.deleted_at'))
+            ->get();
+
+        $this->assertNoSql();
+        $ids = $result->pluck('id')->all();
+        $this->assertContains($alice->id, $ids);
+        $this->assertContains($bob->id, $ids);
+    }
+
+    #[Test]
     public function unsupported_inner_predicate_falls_through(): void
     {
         [$alice, $bob] = $this->seedUsersWithPosts();

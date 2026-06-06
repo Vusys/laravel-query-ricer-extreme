@@ -260,6 +260,66 @@ final class BelongsToMemoryTest extends TestCase
     }
 
     #[Test]
+    public function belongs_to_serves_from_memory_when_soft_delete_null_where_added(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        $post = Post::create(['user_id' => $user->id, 'title' => 'Hello', 'published' => false]);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = $post->user()->whereNull('users.deleted_at')->getResults();
+
+        $this->assertSame(0, $queryCount, 'isSafeGlobalScopeWhere must accept WHERE users.deleted_at IS NULL so memory still serves the relation');
+        $this->assertNotNull($result);
+        $this->assertSame($user->id, $result->id);
+    }
+
+    #[Test]
+    public function belongs_to_falls_back_when_soft_delete_null_followed_by_unrelated_where(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        $post = Post::create(['user_id' => $user->id, 'title' => 'Hello', 'published' => false]);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = $post->user()->whereNull('users.deleted_at')->where('name', 'Alice')->getResults();
+
+        $this->assertGreaterThan(
+            0,
+            $queryCount,
+            'a safe soft-delete where must `continue` rather than `break` so the trailing extra where still forces fallback',
+        );
+        $this->assertNotNull($result);
+        $this->assertSame($user->id, $result->id);
+    }
+
+    #[Test]
+    public function belongs_to_falls_back_when_non_null_where_targets_deleted_at_column(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        $post = Post::create(['user_id' => $user->id, 'title' => 'Hello', 'published' => false]);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $post->user()->where('users.deleted_at', '>', '2026-01-01')->getResults();
+
+        $this->assertGreaterThan(
+            0,
+            $queryCount,
+            'isSafeGlobalScopeWhere must reject a Basic where on deleted_at — only WHERE IS NULL is safe; otherwise memory could serve a stale row',
+        );
+    }
+
+    #[Test]
     public function belongs_to_with_specific_select_columns_served_from_memory(): void
     {
         $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);

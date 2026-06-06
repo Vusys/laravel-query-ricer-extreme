@@ -86,6 +86,49 @@ final class HasManyMemoryTest extends TestCase
     }
 
     #[Test]
+    public function has_many_serves_from_memory_when_soft_delete_null_where_added(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        Post::create(['user_id' => $user->id, 'title' => 'P1', 'published' => true]);
+        Post::create(['user_id' => $user->id, 'title' => 'P2', 'published' => true]);
+
+        $user->load('posts');
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = $user->posts()->whereNull('posts.deleted_at')->get();
+
+        $this->assertSame(0, $queryCount, 'isSafeGlobalScopeWhere must accept WHERE posts.deleted_at IS NULL so hasMany still serves from memory');
+        $this->assertCount(2, $result);
+    }
+
+    #[Test]
+    public function has_many_filters_in_memory_when_soft_delete_null_followed_by_extra_predicate(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        Post::create(['user_id' => $user->id, 'title' => 'P1', 'published' => true]);
+        Post::create(['user_id' => $user->id, 'title' => 'P2', 'published' => true]);
+        Post::create(['user_id' => $user->id, 'title' => 'P3', 'published' => false]);
+
+        $user->load('posts');
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        // A safe soft-delete where must `continue` rather than `break` so the
+        // trailing `published=true` predicate is still extracted and applied.
+        $result = $user->posts()->whereNull('posts.deleted_at')->where('published', true)->get();
+
+        $this->assertSame(0, $queryCount, 'hasMany must keep serving from memory when the chain is whereNull(deleted_at) + extra predicate');
+        $this->assertCount(2, $result);
+    }
+
+    #[Test]
     public function has_many_falls_back_to_sql_before_first_load(): void
     {
         $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);

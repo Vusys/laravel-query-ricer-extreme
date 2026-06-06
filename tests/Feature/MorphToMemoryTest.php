@@ -293,4 +293,75 @@ final class MorphToMemoryTest extends TestCase
 
         $this->assertGreaterThan(0, $queryCount, 'queryHasHazards() must fall back to SQL when a row lock is present');
     }
+
+    #[Test]
+    public function morph_to_serves_from_memory_when_soft_delete_null_where_added(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        $comment = Comment::create([
+            'commentable_type' => User::class,
+            'commentable_id' => $user->id,
+            'body' => 'hello',
+        ]);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $result = $comment->commentable()->whereNull('users.deleted_at')->getResults();
+
+        $this->assertSame(0, $queryCount, 'isSafeGlobalScopeWhere must accept the WHERE deleted_at IS NULL added by SoftDeletes so memory still serves the morph');
+        $this->assertNotNull($result);
+        $this->assertSame($user->id, $result->getKey());
+    }
+
+    #[Test]
+    public function morph_to_falls_back_when_soft_delete_null_followed_by_unrelated_where(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        $comment = Comment::create([
+            'commentable_type' => User::class,
+            'commentable_id' => $user->id,
+            'body' => 'hello',
+        ]);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $relation = $comment->commentable()->whereNull('users.deleted_at')->where('name', 'Alice');
+        $relation->getResults();
+
+        $this->assertGreaterThan(
+            0,
+            $queryCount,
+            'a safe soft-delete where must `continue` rather than `break` so the trailing extra where still forces fallback',
+        );
+    }
+
+    #[Test]
+    public function morph_to_falls_back_when_non_null_where_targets_deleted_at_column(): void
+    {
+        $user = User::create(['name' => 'Alice', 'email' => 'alice@example.com']);
+        $comment = Comment::create([
+            'commentable_type' => User::class,
+            'commentable_id' => $user->id,
+            'body' => 'hello',
+        ]);
+
+        $queryCount = 0;
+        DB::listen(function () use (&$queryCount): void {
+            $queryCount++;
+        });
+
+        $comment->commentable()->where('users.deleted_at', '>', '2026-01-01')->getResults();
+
+        $this->assertGreaterThan(
+            0,
+            $queryCount,
+            'isSafeGlobalScopeWhere must reject a Basic where on deleted_at — only WHERE IS NULL is safe; otherwise memory could serve a stale row',
+        );
+    }
 }

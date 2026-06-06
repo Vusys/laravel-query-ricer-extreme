@@ -283,6 +283,45 @@ final class BelongsToManyHardeningTest extends TestCase
     }
 
     // ------------------------------------------------------------------
+    // isSafeGlobalScopeWhere — soft-delete WHERE IS NULL on related table
+    // ------------------------------------------------------------------
+
+    #[Test]
+    public function soft_delete_null_where_on_tags_is_safe_and_serves_from_memory(): void
+    {
+        $post = $this->makePostWithTags(3);
+        $post->tags()->get(); // populates coverage
+
+        $n = $this->countQueries(function () use ($post): void {
+            $rs = $post->tags()->whereNull('tags.deleted_at')->get();
+            $this->assertCount(3, $rs);
+        });
+
+        $this->assertSame(0, $n, 'isSafeGlobalScopeWhere must accept WHERE tags.deleted_at IS NULL so memory still serves');
+    }
+
+    #[Test]
+    public function soft_delete_null_followed_by_extra_predicate_still_resolves_in_memory(): void
+    {
+        $post = $this->makePostWithTags(4);
+        $post->tags()->get();
+
+        $allTags = $post->tags()->get();
+        $names = $allTags->pluck('name')->all();
+        sort($names);
+        $targetName = $names[1];
+
+        $n = $this->countQueries(function () use ($post, $targetName): void {
+            // A safe soft-delete where must `continue` rather than `break` so the
+            // trailing name predicate is still extracted and applied.
+            $rs = $post->tags()->whereNull('tags.deleted_at')->where('name', $targetName)->get();
+            $this->assertCount(1, $rs);
+        });
+
+        $this->assertSame(0, $n);
+    }
+
+    // ------------------------------------------------------------------
     // extractExtraPredicates / isCleanLoad — unsupported boolean → SQL
     // ------------------------------------------------------------------
 
