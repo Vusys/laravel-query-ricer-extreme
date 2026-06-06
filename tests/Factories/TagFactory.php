@@ -18,7 +18,7 @@ final class TagFactory extends Factory
     public function definition(): array
     {
         return [
-            'name' => fake()->unique()->word(),
+            'name' => fake()->word(),
             'priority' => fake()->numberBetween(0, 5),
             'color' => fake()->optional()->hexColor(),
         ];
