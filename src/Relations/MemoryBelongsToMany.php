@@ -867,6 +867,11 @@ final class MemoryBelongsToMany extends BelongsToMany
     private function queryHasHazards(): bool
     {
         $query = $this->query->getQuery();
+
+        if ($this->query->getEagerLoads() !== []) {
+            return true;
+        }
+
         $joins = $query->joins ?? [];
 
         // BelongsToMany always adds exactly one inner join against the pivot table.

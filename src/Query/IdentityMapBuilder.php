@@ -1231,6 +1231,10 @@ class IdentityMapBuilder extends Builder
                     sqlExecuted: false,
                 ));
 
+                if ($this->eagerLoad !== []) {
+                    $this->eagerLoadRelations([$sorted]);
+                }
+
                 return $sorted;
             }
         }
@@ -1281,6 +1285,10 @@ class IdentityMapBuilder extends Builder
 
             if ($count > 1) {
                 throw new MultipleRecordsFoundException($count);
+            }
+
+            if ($this->eagerLoad !== []) {
+                $this->eagerLoadRelations([$coveredModels[0]]);
             }
 
             return $coveredModels[0];
