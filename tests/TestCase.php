@@ -21,6 +21,7 @@ abstract class TestCase extends OrchestraTestCase
     #[\Override]
     protected function defineDatabaseMigrations(): void
     {
+        Schema::dropIfExists('cast_samples');
         Schema::dropIfExists('post_tag');
         Schema::dropIfExists('comments');
         Schema::dropIfExists('posts');
@@ -93,11 +94,23 @@ abstract class TestCase extends OrchestraTestCase
             $table->timestamps();
             $table->unique(['post_id', 'tag_id']);
         });
+
+        Schema::create('cast_samples', function (Blueprint $table): void {
+            $table->id();
+            $table->string('name');
+            $table->dateTime('happened_at')->nullable();
+            $table->dateTime('archived_at')->nullable();
+            $table->json('payload')->nullable();
+            $table->string('status')->nullable();
+            $table->decimal('amount', 10, 2)->nullable();
+            $table->text('secret')->nullable();
+        });
     }
 
     #[\Override]
     protected function tearDown(): void
     {
+        Schema::dropIfExists('cast_samples');
         Schema::dropIfExists('post_tag');
         Schema::dropIfExists('comments');
         Schema::dropIfExists('posts');

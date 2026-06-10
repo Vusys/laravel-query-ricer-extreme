@@ -162,6 +162,7 @@ Absent-key tracking means the package remembers which primary keys and unique-ke
 - The model does not use the `HasIdentityMap` trait.
 - You need results to persist across requests (use a cache layer instead).
 - The query involves pessimistic locking (`lockForUpdate`, `sharedLock`).
+- The model resolves its table name dynamically (e.g. per-tenant table switching via a custom `getTable()`). `initializeHasIdentityMap()` reads `getTable()` **once per class** and caches it (`self::$tableNameCache[static::class]`), so a model that returns different table names per instance must not use the trait as-is — the cached table would key store entries against the wrong table.
 
 ---
 

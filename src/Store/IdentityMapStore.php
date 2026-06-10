@@ -100,7 +100,23 @@ final class IdentityMapStore
 
         if (isset($this->entries[$mapKey])) {
             $entry = $this->entries[$mapKey];
-            $entry->model = $model;
+
+            // A partial-column hydration (pluck / select(subset)) must not replace
+            // a richer cached instance with a narrower one — that would drop columns
+            // while recordFromModel() keeps allColumnsKnown=true, so a later ['*']
+            // read would serve a model missing attributes. Merge fresh values into
+            // the canonical instance instead of downgrading it.
+            $droppedColumns = array_diff_key($entry->model->getAttributes(), $model->getAttributes());
+
+            if ($droppedColumns !== []) {
+                $entry->model->setRawAttributes(
+                    array_merge($entry->model->getAttributes(), $model->getAttributes()),
+                    true,
+                );
+            } else {
+                $entry->model = $model;
+            }
+
             $entry->version++;
             $entry->attributes->recordFromModel($model, $allColumnsKnown);
         } else {
@@ -525,6 +541,11 @@ final class IdentityMapStore
         foreach ($equalityValues as $column => $value) {
             $fact = $entry->attributes->get($column);
             if (! $fact instanceof AttributeFact) {
+                // The index points at an entry that no longer carries the indexed
+                // column. Evict so the next lookup falls through to SQL and
+                // re-indexes, instead of missing against this stale entry forever.
+                $this->uniqueKeyIndex->evict($uniqueFp);
+
                 return null;
             }
             // phpcs:ignore SlevomatCodingStandard.Operators.DisallowEqualOperators

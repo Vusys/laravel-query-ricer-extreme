@@ -100,7 +100,7 @@ final class MemoryMorphTo extends MorphTo
 
         if ($entry !== null && $entry->state === LifecycleState::Exists) {
             $store->capture(new Explanation(
-                type: PlanType::ReturnBelongsToFromMemory,
+                type: PlanType::ReturnMorphToFromMemory,
                 modelClass: $resolvedClass,
                 reason: 'morph-to-memory-hit',
                 sqlExecuted: false,

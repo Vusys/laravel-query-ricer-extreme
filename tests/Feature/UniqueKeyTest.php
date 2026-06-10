@@ -7,8 +7,11 @@ namespace Vusys\QueryRicerExtreme\Tests\Feature;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Facades\DB;
 use PHPUnit\Framework\Attributes\Test;
+use Vusys\QueryRicerExtreme\Enums\FactConfidence;
+use Vusys\QueryRicerExtreme\Enums\FactSource;
 use Vusys\QueryRicerExtreme\Enums\PlanType;
 use Vusys\QueryRicerExtreme\IdentityMap;
+use Vusys\QueryRicerExtreme\Knowledge\AttributeFact;
 use Vusys\QueryRicerExtreme\Store\IdentityMapStore;
 use Vusys\QueryRicerExtreme\Tests\Models\User;
 use Vusys\QueryRicerExtreme\Tests\TestCase;
@@ -490,6 +493,44 @@ final class UniqueKeyTest extends TestCase
     // -----------------------------------------------------------------------
     // Partial model — unknown unique-key column → fall through to SQL
     // -----------------------------------------------------------------------
+
+    #[Test]
+    public function unique_key_lookup_with_missing_fact_evicts_the_stale_index_pointer(): void
+    {
+        $alice = $this->createFresh('Alice', 'alice@example.com');
+        $this->store->remember($alice, true);
+
+        $entry = $this->store->findEntry($alice);
+        $this->assertNotNull($entry);
+
+        $args = [$entry->connection, User::class, $entry->table, $entry->scopeFingerprint, ['email' => 'alice@example.com']];
+
+        // Sanity: the email unique key is indexed and resolves to the entry.
+        $this->assertNotNull($this->store->findByUniqueKey(...$args));
+
+        // Drop the indexed column's fact while the index still points at the entry.
+        unset($entry->attributes->facts['email']);
+
+        // The missing-fact lookup must return null AND evict the stale pointer —
+        // matching the mismatch branch, not leave it dangling forever.
+        $this->assertNull($this->store->findByUniqueKey(...$args));
+
+        // Restore the fact: had the lookup not evicted, the still-present pointer
+        // would now wrongly resolve. Eviction means the index is gone → null.
+        $entry->attributes->set('email', new AttributeFact(
+            column: 'email',
+            originalValue: 'alice@example.com',
+            currentValue: 'alice@example.com',
+            isDirty: false,
+            confidence: FactConfidence::Certain,
+            source: FactSource::HydratedFromDatabase,
+        ));
+
+        $this->assertNull(
+            $this->store->findByUniqueKey(...$args),
+            'a missing-fact lookup must evict the index pointer so it does not miss forever',
+        );
+    }
 
     #[Test]
     public function partial_model_missing_unique_column_falls_to_sql(): void

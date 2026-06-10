@@ -41,11 +41,18 @@ final class MorphToMemoryTest extends TestCase
             $queryCount++;
         });
 
+        $explanations = $this->store->explain(function () use ($comment): void {
+            $comment->commentable()->getResults();
+        });
+
         $result = $comment->commentable;
 
         $this->assertSame(0, $queryCount, 'morphTo should hit memory without SQL');
         $this->assertNotNull($result);
         $this->assertSame($user->id, $result->getKey());
+
+        $planTypes = array_map(fn (Explanation $e): string => $e->type->value, $explanations);
+        $this->assertContains('return_morph_to_from_memory', $planTypes, 'morphTo memory hit must capture its own plan type');
     }
 
     #[Test]
@@ -204,7 +211,7 @@ final class MorphToMemoryTest extends TestCase
 
         $planTypes = array_map(fn (Explanation $e) => $e->type->value, $explanations);
         $this->assertNotContains(
-            'return_belongs_to_from_memory',
+            'return_morph_to_from_memory',
             $planTypes,
             'queryHasHazards() must prevent MemoryMorphTo from serving directly when a join is present',
         );
@@ -233,7 +240,7 @@ final class MorphToMemoryTest extends TestCase
 
         $planTypes = array_map(fn (Explanation $e) => $e->type->value, $explanations);
         $this->assertNotContains(
-            'return_belongs_to_from_memory',
+            'return_morph_to_from_memory',
             $planTypes,
             'queryHasHazards() must prevent MemoryMorphTo from serving directly when GROUP BY is present',
         );
@@ -266,7 +273,7 @@ final class MorphToMemoryTest extends TestCase
 
         $planTypes = array_map(fn (Explanation $e) => $e->type->value, $explanations);
         $this->assertNotContains(
-            'return_belongs_to_from_memory',
+            'return_morph_to_from_memory',
             $planTypes,
             'queryHasHazards() must prevent MemoryMorphTo from serving directly when HAVING is present',
         );

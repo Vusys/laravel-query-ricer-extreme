@@ -17,6 +17,7 @@ enum PlanType: string
     case ReturnExistsFromMemory = 'return_exists_from_memory';
     case ReturnCountFromCoverage = 'return_count_from_coverage';
     case ReturnBelongsToFromMemory = 'return_belongs_to_from_memory';
+    case ReturnMorphToFromMemory = 'return_morph_to_from_memory';
     case FilterHasManyInMemory = 'filter_has_many_in_memory';
     case ReturnCollectionFromCoverage = 'return_collection_from_coverage';
     case ReturnExistsFromCoverage = 'return_exists_from_coverage';
