@@ -165,6 +165,10 @@ final readonly class QueryPatternExtractor
             return null;
         }
 
+        if ($query->orders !== null && $query->orders !== []) {
+            return null;
+        }
+
         /** @var array<int, array<string, mixed>> $wheres */
         $wheres = $query->wheres;
 
@@ -441,6 +445,19 @@ final readonly class QueryPatternExtractor
         }
 
         return new AndNode($nodes);
+    }
+
+    /**
+     * Whether the query carries an explicit ORDER BY. Order-sensitive serving
+     * paths (get/pluck) must bail to SQL when this is true; order-independent
+     * paths (count, aggregates, exists) and paths that sort in memory (first via
+     * sortForFirst) may ignore it.
+     */
+    public function hasOrderBy(): bool
+    {
+        $orders = $this->builder->getQuery()->orders;
+
+        return $orders !== null && $orders !== [];
     }
 
     /**

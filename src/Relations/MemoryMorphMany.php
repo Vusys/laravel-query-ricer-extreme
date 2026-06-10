@@ -384,6 +384,7 @@ final class MemoryMorphMany extends MorphMany
             || ($query->groups !== null && $query->groups !== [])
             || ($query->havings !== null && $query->havings !== [])
             || $query->lock !== null
+            || ($query->orders !== null && $query->orders !== [])
             || ($query->offset !== null && $query->offset > 0)
             || $query->limit !== null;
     }

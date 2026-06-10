@@ -698,7 +698,11 @@ class IdentityMapBuilder extends Builder
         }
 
         // --- coverage registry check ---
-        $coveredModels = $this->getModelsFromCoverage($columns, $store, $connection, $fingerprint, $extractor);
+        // An explicit ORDER BY makes get() order-sensitive; coverage serves rows
+        // in recorded order, so bail to SQL until in-memory ordering lands.
+        $coveredModels = $extractor->hasOrderBy()
+            ? null
+            : $this->getModelsFromCoverage($columns, $store, $connection, $fingerprint, $extractor);
 
         if ($coveredModels !== null) {
             $store->capture(new Explanation(
@@ -1156,7 +1160,11 @@ class IdentityMapBuilder extends Builder
 
         $neededColumns = is_string($key) ? [$column, $key] : [$column];
 
-        $coveredModels = $this->getModelsFromCoverage($neededColumns, $store, $connection, $fingerprint, $extractor);
+        // pluck() returns an ordered list; an explicit ORDER BY makes coverage's
+        // recorded-order result diverge from SQL, so bail to SQL in that case.
+        $coveredModels = $extractor->hasOrderBy()
+            ? null
+            : $this->getModelsFromCoverage($neededColumns, $store, $connection, $fingerprint, $extractor);
 
         if ($coveredModels !== null) {
             $store->capture(new Explanation(
