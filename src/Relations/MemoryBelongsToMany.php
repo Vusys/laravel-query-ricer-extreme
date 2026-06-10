@@ -7,6 +7,11 @@ namespace Vusys\QueryRicerExtreme\Relations;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Vusys\QueryRicerExtreme\Driver\ColumnSemantics;
+use Vusys\QueryRicerExtreme\Driver\ColumnSemanticsResolver;
+use Vusys\QueryRicerExtreme\Driver\ConservativeSemantics;
+use Vusys\QueryRicerExtreme\Driver\DriverSemantics;
+use Vusys\QueryRicerExtreme\Driver\DriverSemanticsResolver;
 use Vusys\QueryRicerExtreme\Enums\EvaluationResult;
 use Vusys\QueryRicerExtreme\Enums\LifecycleState;
 use Vusys\QueryRicerExtreme\Enums\PlanType;
@@ -40,6 +45,13 @@ use Vusys\QueryRicerExtreme\Store\IdentityMapStore;
  */
 final class MemoryBelongsToMany extends BelongsToMany
 {
+    private ?DriverSemantics $pivotDriverSemantics = null;
+
+    private ?Model $pivotSemanticsModel = null;
+
+    /** @var array<string, ColumnSemantics> */
+    private array $pivotColumnSemanticsCache = [];
+
     /**
      * @param  array<int, string>  $columns
      * @return Collection<int, TRelatedModel>
@@ -595,15 +607,13 @@ final class MemoryBelongsToMany extends BelongsToMany
                 return EvaluationResult::Unknown;
             }
 
-            // phpcs:ignore SlevomatCodingStandard.Operators.DisallowEqualOperators
             return match ($node->operator) {
-                '=' => $attrValue == $predicateValue
-                    ? EvaluationResult::Match
-                    : EvaluationResult::Reject,
-                '!=', '<>' => $attrValue != $predicateValue
-                    ? EvaluationResult::Match
-                    : EvaluationResult::Reject,
-                '>', '>=', '<', '<=' => $this->evaluateNumericComparison($attrValue, $node->operator, $predicateValue),
+                '=', '!=', '<>', '>', '>=', '<', '<=' => $this->pivotDriverSemantics()->compare(
+                    $attrValue,
+                    $node->operator,
+                    $predicateValue,
+                    $this->pivotColumnSemantics($column),
+                ),
                 default => EvaluationResult::Unknown,
             };
         }
@@ -623,6 +633,9 @@ final class MemoryBelongsToMany extends BelongsToMany
 
             $found = false;
             $hasNullInList = false;
+            $hasUnknown = false;
+            $semantics = $this->pivotDriverSemantics();
+            $columnSemantics = $this->pivotColumnSemantics($column);
 
             foreach ($node->values as $value) {
                 if ($value === null) {
@@ -631,14 +644,19 @@ final class MemoryBelongsToMany extends BelongsToMany
                     continue;
                 }
 
-                // phpcs:ignore SlevomatCodingStandard.Operators.DisallowEqualOperators
-                if ($attrValue == $value) {
+                $result = $semantics->compare($attrValue, '=', $value, $columnSemantics);
+
+                if ($result === EvaluationResult::Match) {
                     $found = true;
                     break;
                 }
+
+                if ($result === EvaluationResult::Unknown) {
+                    $hasUnknown = true;
+                }
             }
 
-            if (! $found && $hasNullInList) {
+            if (! $found && ($hasNullInList || $hasUnknown)) {
                 return EvaluationResult::Unknown;
             }
 
@@ -650,14 +668,21 @@ final class MemoryBelongsToMany extends BelongsToMany
         }
 
         if ($node instanceof BetweenNode) {
-            if (! is_int($attrValue) && ! is_float($attrValue)
-                || ! is_int($node->min) && ! is_float($node->min)
-                || ! is_int($node->max) && ! is_float($node->max)
-            ) {
+            $semantics = $this->pivotDriverSemantics();
+            $columnSemantics = $this->pivotColumnSemantics($column);
+
+            $lower = $semantics->compare($attrValue, '>=', $node->min, $columnSemantics);
+            $upper = $semantics->compare($attrValue, '<=', $node->max, $columnSemantics);
+
+            $inRange = match (true) {
+                $lower === EvaluationResult::Match && $upper === EvaluationResult::Match => true,
+                $lower === EvaluationResult::Reject || $upper === EvaluationResult::Reject => false,
+                default => null,
+            };
+
+            if ($inRange === null) {
                 return EvaluationResult::Unknown;
             }
-
-            $inRange = $attrValue >= $node->min && $attrValue <= $node->max;
 
             return $node->negated
                 ? ($inRange ? EvaluationResult::Reject : EvaluationResult::Match)
@@ -667,19 +692,41 @@ final class MemoryBelongsToMany extends BelongsToMany
         return EvaluationResult::Unknown;
     }
 
-    /** @param '>'|'>='|'<'|'<=' $op */
-    private function evaluateNumericComparison(mixed $a, string $op, mixed $b): EvaluationResult
+    private function pivotDriverSemantics(): DriverSemantics
     {
-        if (! is_int($a) && ! is_float($a) || ! is_int($b) && ! is_float($b)) {
-            return EvaluationResult::Unknown;
+        if ($this->pivotDriverSemantics instanceof DriverSemantics) {
+            return $this->pivotDriverSemantics;
         }
 
-        return match ($op) {
-            '>' => $a > $b ? EvaluationResult::Match : EvaluationResult::Reject,
-            '>=' => $a >= $b ? EvaluationResult::Match : EvaluationResult::Reject,
-            '<' => $a < $b ? EvaluationResult::Match : EvaluationResult::Reject,
-            '<=' => $a <= $b ? EvaluationResult::Match : EvaluationResult::Reject,
-        };
+        $app = function_exists('app') ? app() : null;
+
+        if ($app === null || ! $app->bound(DriverSemanticsResolver::class)) {
+            return $this->pivotDriverSemantics = new ConservativeSemantics;
+        }
+
+        /** @var DriverSemanticsResolver $resolver */
+        $resolver = $app->make(DriverSemanticsResolver::class);
+
+        return $this->pivotDriverSemantics = $resolver->forConnection($this->related->getConnection());
+    }
+
+    private function pivotColumnSemantics(string $column): ColumnSemantics
+    {
+        if (array_key_exists($column, $this->pivotColumnSemanticsCache)) {
+            return $this->pivotColumnSemanticsCache[$column];
+        }
+
+        $app = function_exists('app') ? app() : null;
+
+        if ($app === null || ! $app->bound(ColumnSemanticsResolver::class)) {
+            return $this->pivotColumnSemanticsCache[$column] = ColumnSemantics::unknown();
+        }
+
+        /** @var ColumnSemanticsResolver $resolver */
+        $resolver = $app->make(ColumnSemanticsResolver::class);
+        $this->pivotSemanticsModel ??= $this->newPivot();
+
+        return $this->pivotColumnSemanticsCache[$column] = $resolver->for($this->pivotSemanticsModel, $column);
     }
 
     private function pivotColumnOf(PredicateNode $node): ?string
@@ -867,6 +914,11 @@ final class MemoryBelongsToMany extends BelongsToMany
     private function queryHasHazards(): bool
     {
         $query = $this->query->getQuery();
+
+        if ($this->query->getEagerLoads() !== []) {
+            return true;
+        }
+
         $joins = $query->joins ?? [];
 
         // BelongsToMany always adds exactly one inner join against the pivot table.
@@ -879,6 +931,7 @@ final class MemoryBelongsToMany extends BelongsToMany
             || ($query->groups !== null && $query->groups !== [])
             || ($query->havings !== null && $query->havings !== [])
             || $query->lock !== null
+            || ($query->orders !== null && $query->orders !== [])
             || ($query->offset !== null && $query->offset > 0)
             || $query->limit !== null;
     }

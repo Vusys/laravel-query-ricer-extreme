@@ -355,11 +355,16 @@ final class MemoryHasMany extends HasMany
     {
         $query = $this->query->getQuery();
 
+        if ($this->query->getEagerLoads() !== []) {
+            return true;
+        }
+
         return ($query->joins !== null && $query->joins !== [])
             || ($query->unions !== null && $query->unions !== [])
             || ($query->groups !== null && $query->groups !== [])
             || ($query->havings !== null && $query->havings !== [])
             || $query->lock !== null
+            || ($query->orders !== null && $query->orders !== [])
             || ($query->offset !== null && $query->offset > 0)
             || $query->limit !== null;
     }

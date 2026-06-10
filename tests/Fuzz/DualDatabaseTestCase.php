@@ -133,6 +133,7 @@ abstract class DualDatabaseTestCase extends FuzzerTestCase
             $table->unsignedBigInteger('tag_id');
             $table->boolean('active')->default(true);
             $table->unsignedInteger('priority')->default(0);
+            $table->string('role')->nullable();
             $table->timestamps();
             $table->unique(['post_id', 'tag_id']);
         });

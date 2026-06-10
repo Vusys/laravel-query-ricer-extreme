@@ -67,7 +67,7 @@ final class Post extends Model
     public function tags(): BelongsToMany
     {
         return $this->belongsToMany(Tag::class)
-            ->withPivot(['active', 'priority'])
+            ->withPivot(['active', 'priority', 'role'])
             ->withTimestamps();
     }
 }

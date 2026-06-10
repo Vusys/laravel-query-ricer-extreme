@@ -89,6 +89,7 @@ abstract class TestCase extends OrchestraTestCase
             $table->foreignId('tag_id')->constrained()->cascadeOnDelete();
             $table->boolean('active')->default(true);
             $table->unsignedInteger('priority')->default(0);
+            $table->string('role')->nullable();
             $table->timestamps();
             $table->unique(['post_id', 'tag_id']);
         });
