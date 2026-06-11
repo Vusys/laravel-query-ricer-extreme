@@ -21,6 +21,7 @@ abstract class TestCase extends OrchestraTestCase
     #[\Override]
     protected function defineDatabaseMigrations(): void
     {
+        Schema::dropIfExists('gadgets');
         Schema::dropIfExists('cast_samples');
         Schema::dropIfExists('post_tag');
         Schema::dropIfExists('comments');
@@ -105,11 +106,18 @@ abstract class TestCase extends OrchestraTestCase
             $table->decimal('amount', 10, 2)->nullable();
             $table->text('secret')->nullable();
         });
+
+        Schema::create('gadgets', function (Blueprint $table): void {
+            $table->id();
+            $table->string('code');
+            $table->integer('qty')->default(0);
+        });
     }
 
     #[\Override]
     protected function tearDown(): void
     {
+        Schema::dropIfExists('gadgets');
         Schema::dropIfExists('cast_samples');
         Schema::dropIfExists('post_tag');
         Schema::dropIfExists('comments');

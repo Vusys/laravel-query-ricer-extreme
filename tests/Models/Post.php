@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Vusys\QueryRicerExtreme\HasIdentityMap;
 use Vusys\QueryRicerExtreme\Tests\Concerns\UsesContextConnection;
 use Vusys\QueryRicerExtreme\Tests\Factories\PostFactory;
+use Vusys\QueryRicerExtreme\Tests\Models\Pivots\CastTagging;
 
 /**
  * @property int $id
@@ -67,6 +68,15 @@ final class Post extends Model
     public function tags(): BelongsToMany
     {
         return $this->belongsToMany(Tag::class)
+            ->withPivot(['active', 'priority', 'role'])
+            ->withTimestamps();
+    }
+
+    /** @return BelongsToMany<Tag, $this, CastTagging, 'pivot'> */
+    public function castTags(): BelongsToMany
+    {
+        return $this->belongsToMany(Tag::class, 'post_tag')
+            ->using(CastTagging::class)
             ->withPivot(['active', 'priority', 'role'])
             ->withTimestamps();
     }
