@@ -47,24 +47,24 @@ final class AccessorAppendsTest extends TestCase
     public function predicate_on_shadowed_column_matches_sql_from_memory(): void
     {
         $gadget = Gadget::create(['code' => 'abc', 'qty' => 3]);
-        Gadget::find($gadget->id);
+        Gadget::query()->get(); // record coverage so the predicate can be evaluated in memory
 
-        $queryCount = 0;
-        DB::listen(function () use (&$queryCount): void {
-            $queryCount++;
-        });
-
-        // SQL compares against the stored lower-case value.
+        // The predicate compares against the stored DB value, so a memory-served
+        // result must equal SQL — whatever the column collation decides about
+        // 'abc' vs 'ABC' (case-sensitive on sqlite/pgsql, case-insensitive on a
+        // default MySQL/MariaDB collation; under the conservative string mode the
+        // package bails to SQL either way). The accessor output never enters in:
+        // a naive implementation reading $gadget->code ('ABC') would wrongly match
+        // the 'ABC' query, diverging from the oracle.
         $hit = Gadget::where('code', 'abc')->get()->pluck('id')->all();
         $miss = Gadget::where('code', 'ABC')->get()->pluck('id')->all();
 
         $oracleHit = IdentityMap::disabled(fn (): array => Gadget::where('code', 'abc')->get()->pluck('id')->all());
         $oracleMiss = IdentityMap::disabled(fn (): array => Gadget::where('code', 'ABC')->get()->pluck('id')->all());
 
-        $this->assertSame($oracleHit, $hit);
-        $this->assertSame($oracleMiss, $miss);
+        $this->assertSame($oracleHit, $hit, 'exact-case predicate must match SQL');
+        $this->assertSame($oracleMiss, $miss, 'predicate must use the DB value, not the accessor output — and match SQL collation behaviour');
         $this->assertSame([$gadget->id], $hit);
-        $this->assertSame([], $miss, 'predicate must use the DB value (abc), not the accessor output (ABC)');
     }
 
     #[Test]
