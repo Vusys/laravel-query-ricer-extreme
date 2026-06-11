@@ -35,6 +35,23 @@ trait HasIdentityMap
     private static array $tableNameCache = [];
 
     /**
+     * Per-relation-signature memo of the guessed relation name.
+     *
+     * The name is guessed once, via debug_backtrace, from the first
+     * instantiation of a given relation and reused thereafter — eliminating the
+     * backtrace cost on every subsequent `$model->relation` access. The key is
+     * the relation's structural signature (declaring class, related class, and
+     * keys), NOT the guessed method name: a complete relation fact is only ever
+     * recorded for an unconstrained load, whose row set is fully determined by
+     * that signature, so two methods sharing one signature are interchangeable
+     * for memory purposes. `null` (un-guessable name) is memoised too, so the
+     * fallback path is not re-walked on every call.
+     *
+     * @var array<string, string|null>
+     */
+    private static array $relationNameMemo = [];
+
+    /**
      * Fires once per Model::__construct. Eloquent's Model::getTable() returns
      * `$this->table ?? Str::snake(Str::pluralStudly(class_basename($this)))`,
      * so the pluralization chain re-runs on every fresh instance unless the
@@ -72,20 +89,37 @@ trait HasIdentityMap
 
     protected function newHasMany(Builder $query, Model $parent, $foreignKey, $localKey): HasMany
     {
-        $frames = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 3);
-        $callerFrame = $frames[2] ?? [];
-        $name = is_string($callerFrame['function'] ?? null) ? $callerFrame['function'] : null;
+        $signature = static::class.'|hasMany|'.$query->getModel()::class.'|'.serialize([$foreignKey, $localKey]);
+        $name = $this->memoisedRelationName($signature);
 
         return (new MemoryHasMany($query, $parent, $foreignKey, $localKey))->withRelationName($name);
     }
 
     protected function newMorphMany(Builder $query, Model $parent, $type, $id, $localKey): MorphMany
     {
-        $frames = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 3);
-        $callerFrame = $frames[2] ?? [];
-        $name = is_string($callerFrame['function'] ?? null) ? $callerFrame['function'] : null;
+        $signature = static::class.'|morphMany|'.$query->getModel()::class.'|'.serialize([$type, $id, $localKey]);
+        $name = $this->memoisedRelationName($signature);
 
         return (new MemoryMorphMany($query, $parent, $type, $id, $localKey))->withRelationName($name);
+    }
+
+    /**
+     * Guess the calling relation method's name from the backtrace, once per
+     * structural signature. The frame depth is measured from this helper:
+     * frame 0 = this method, 1 = newHasMany/newMorphMany, 2 = Eloquent's
+     * hasMany/morphMany factory, 3 = the user's relation method.
+     */
+    private function memoisedRelationName(string $signature): ?string
+    {
+        if (array_key_exists($signature, self::$relationNameMemo)) {
+            return self::$relationNameMemo[$signature];
+        }
+
+        $frames = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 4);
+        $callerFrame = $frames[3] ?? [];
+        $name = is_string($callerFrame['function'] ?? null) ? $callerFrame['function'] : null;
+
+        return self::$relationNameMemo[$signature] = $name;
     }
 
     protected function newBelongsToMany(
